@@ -1,3 +1,4 @@
+import re
 from string import ascii_uppercase
 
 import pandas as pd  # type: ignore
@@ -92,3 +93,30 @@ def encode_mmlu_example(
     attention_mask: Tensor = inputs["attention_mask"].to(device)  # type: ignore
     position_ids = torch.arange(input_ids.shape[1], device=device)[None]
     return input_ids, attention_mask, position_ids
+
+
+def extract_answer_multiple_choice(text: str, start_tag="<|im_start|>") -> str | None:
+    text = text[text.rfind(start_tag) :]
+
+    pattern = r"answer is \(?([A-J])\)?"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1).upper()
+    else:
+        match = re.search(r".*[aA]nswer:\s*([A-J])", text)
+        if match:
+            return match.group(1).upper()
+        else:
+            return None
+
+
+def grade_multiple_choice(text: str, ground_truth_answer: str | None) -> bool:
+    answer = extract_answer_multiple_choice(text)
+    if ground_truth_answer is None:
+        return True
+    elif answer is None:
+        return False
+    elif answer.upper() == ground_truth_answer.upper():
+        return True
+    else:
+        return False
