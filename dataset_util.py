@@ -118,3 +118,58 @@ def grade_multiple_choice(text: str, ground_truth_answer: str | None) -> bool:
         return True
     else:
         return False
+
+
+system_prompt = """\
+Solve the following math problem efficiently and clearly:
+
+- For simple problems (2 steps or fewer):
+Provide a concise solution with minimal explanation.
+
+- For complex problems (3 steps or more):
+Use this step-by-step format:
+
+## Step 1: [Concise description]
+[Brief explanation and calculations]
+
+## Step 2: [Concise description]
+[Brief explanation and calculations]
+
+...
+
+Regardless of the approach, always conclude with:
+
+Therefore, the final answer is: $\\boxed{answer}$. I hope it is correct.
+
+Where [answer] is just the final number or expression that solves the problem."""
+
+
+def encode_math_example(
+    example,
+    tokenizer,
+    device,
+    use_system_prompt=False,
+) -> tuple[Tensor, Tensor, Tensor]:
+    if use_system_prompt:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": example["problem"]},
+        ]
+    else:
+        suffix = (
+            "\nPlease reason step by step, and put your final answer within \\boxed{}."
+        )
+        messages = [{"role": "user", "content": example["problem"] + suffix}]
+
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        padding=True,
+        padding_side="left",
+        return_tensors="pt",
+        return_dict=True,
+    )
+    input_ids: Tensor = inputs["input_ids"].to(device)  # type: ignore
+    attention_mask: Tensor = inputs["attention_mask"].to(device)  # type: ignore
+    position_ids = torch.arange(input_ids.shape[1], device=device)[None]
+    return input_ids, attention_mask, position_ids

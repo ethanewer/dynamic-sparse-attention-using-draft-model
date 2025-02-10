@@ -2,3 +2,4 @@ results*
 mmlu_val_1.json
 *.ipynb
 .DS_Store
+__pycache__*
