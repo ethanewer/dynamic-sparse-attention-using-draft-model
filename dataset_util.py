@@ -5,8 +5,6 @@ import pandas as pd  # type: ignore
 import torch
 from torch import Tensor
 
-device = "mps"
-
 
 def encode_longbench_example(
     example,
