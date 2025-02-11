@@ -56,7 +56,7 @@ def dsa_prefetch(
                 indices = reduced_attentions[j, : j + 1].topk(window_size).indices
                 window_mask[i, j, indices] = attention_mask[0, indices]
 
-    window_mask_4d = -3.4028e38 * (1 - window_mask[:, None, :, :]).float()
+    window_mask_4d = -3.4028e38 * (1 - window_mask[:, None, :, :]).to(draft_model.dtype)  # type: ignore
 
     with torch.no_grad():
         draft_outputs = draft_model(

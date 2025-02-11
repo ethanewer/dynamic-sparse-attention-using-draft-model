@@ -173,3 +173,23 @@ def encode_math_example(
     attention_mask: Tensor = inputs["attention_mask"].to(device)  # type: ignore
     position_ids = torch.arange(input_ids.shape[1], device=device)[None]
     return input_ids, attention_mask, position_ids
+
+
+def extract_boxed_content(answer):
+    i = answer.rfind("\\boxed{") + len("\\boxed{")
+    if i == -1:
+        return None
+
+    j = i
+    brace_count = 1
+    while brace_count > 0 and j < len(answer) - 1:
+        j += 1
+        if answer[j] == "{":
+            brace_count += 1
+        elif answer[j] == "}":
+            brace_count -= 1
+
+    if brace_count > 0:
+        return None
+
+    return answer[i:j] if answer[i:j] != "<answer>" else None
