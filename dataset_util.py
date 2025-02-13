@@ -32,8 +32,6 @@ Let's think step by step.
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
-        padding=True,
-        padding_side="left",
         return_tensors="pt",
         return_dict=True,
     )
@@ -59,30 +57,34 @@ def format_mmlu_question(example):
 
 def encode_mmlu_example(
     example,
-    fewshot_df_path,
     tokenizer,
     device,
+    fewshot_df_path=None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     subject = example["category"]
-    fewshot_df = pd.read_json(fewshot_df_path)
-    filtered_fewshot_df = fewshot_df[fewshot_df["category"] == subject]
-
     messages = []
-    for i in range(len(filtered_fewshot_df)):
-        fewshot_example = filtered_fewshot_df.iloc[i]
-        messages.append(
-            {"role": "user", "content": format_mmlu_question(fewshot_example)}
-        )
-        messages.append(
-            {"role": "assistant", "content": f"{fewshot_example['cot_content']}\n\n"}
-        )
+
+    if fewshot_df_path is not None:
+        fewshot_df = pd.read_json(fewshot_df_path)
+        filtered_fewshot_df = fewshot_df[fewshot_df["category"] == subject]
+
+        for i in range(len(filtered_fewshot_df)):
+            fewshot_example = filtered_fewshot_df.iloc[i]
+            messages.append(
+                {"role": "user", "content": format_mmlu_question(fewshot_example)}
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"{fewshot_example['cot_content']}\n\n",
+                }
+            )
+
     messages.append({"role": "user", "content": format_mmlu_question(example)})
 
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
-        padding=True,
-        padding_side="left",
         return_tensors="pt",
         return_dict=True,
     )
@@ -164,8 +166,6 @@ def encode_math_example(
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
-        padding=True,
-        padding_side="left",
         return_tensors="pt",
         return_dict=True,
     )

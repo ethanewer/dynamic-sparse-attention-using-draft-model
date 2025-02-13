@@ -1,14 +1,63 @@
-from typing import Callable
+from typing import Any
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from transformers import DynamicCache  # type: ignore
+from transformers import Cache, DynamicCache  # type: ignore
 
 
-def dsa_prefetch(
-    draft_model: Callable,
-    full_model: Callable,
+def dsa_step(
+    draft_model: Any,
+    full_model: Any,
+    input_ids: Tensor,
+    attention_mask: Tensor,
+    position_ids: Tensor,
+    cache_position: Tensor,
+    draft_past_key_values: Cache,
+    full_past_key_values: Cache,
+    k: int,
+) -> Tensor:
+    assert input_ids.shape == (1, 1)
+    assert attention_mask.ndim == 2 and attention_mask.shape[0] == 1
+    assert position_ids.shape == (1, 1)
+    assert cache_position.shape == (1,)
+    k = min(k, attention_mask.shape[1])
+    vocab_size = min(draft_model.config.vocab_size, full_model.config.vocab_size)
+
+    with torch.no_grad():
+        draft_outputs = draft_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            output_attentions=True,
+            cache_position=cache_position,
+            past_key_values=draft_past_key_values,
+            use_cache=True,
+        )
+
+    attentions = torch.cat([a[0, :, 0, :] for a in draft_outputs.attentions])
+    reduced_attentions = (attentions.square().sum(dim=0) / len(attentions)).sqrt()
+
+    topk_attention_mask = torch.zeros_like(attention_mask)
+    indices = reduced_attentions.topk(k).indices
+    topk_attention_mask[:, indices] = attention_mask[:, indices]
+
+    with torch.no_grad():
+        full_outputs = full_model(
+            input_ids=input_ids,
+            attention_mask=topk_attention_mask,
+            position_ids=position_ids,
+            cache_position=cache_position,
+            past_key_values=full_past_key_values,
+            use_cache=True,
+        )
+
+    return full_outputs.logits[:, -1:, :vocab_size]
+
+
+def adaptive_dsa_prefetch(
+    draft_model: Any,
+    full_model: Any,
     input_ids: Tensor,
     attention_mask: Tensor,
     position_ids: Tensor,
@@ -96,10 +145,8 @@ def dsa_prefetch(
             use_cache=True,
         )
 
-    full_logits: Tensor = full_outputs.logits
-
     return (
-        full_logits[0],
+        full_outputs.logits,
         window_mask[best_mask_idx],
         cache_position,
         true_draft_past_key_values,
@@ -108,9 +155,9 @@ def dsa_prefetch(
     )
 
 
-def dsa_step(
-    draft_model: Callable,
-    full_model: Callable,
+def adaptive_dsa_step(
+    draft_model: Any,
+    full_model: Any,
     input_ids: Tensor,
     attention_mask: Tensor,
     position_ids: Tensor,
@@ -207,6 +254,4 @@ def dsa_step(
             use_cache=True,
         )
 
-    full_logits: Tensor = full_outputs.logits[:, -1:]
-
-    return full_logits[0], window_mask[best_mask_idx]
+    return full_outputs.logits[:, -1:], window_mask[best_mask_idx]
