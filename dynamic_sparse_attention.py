@@ -55,7 +55,7 @@ def dsa_step(
     return full_outputs.logits[:, -1:, :vocab_size]
 
 
-def adaptive_dsa_prefetch(
+def adaptive_dsa_prefill(
     draft_model: Any,
     full_model: Any,
     input_ids: Tensor,

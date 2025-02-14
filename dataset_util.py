@@ -5,6 +5,9 @@ import pandas as pd  # type: ignore
 import torch
 from torch import Tensor
 
+QWEN_START_TAG = "<|im_start|>"
+LLAMA_START_TAG = "<|start_header_id|>"
+
 
 def encode_longbench_example(
     example,
@@ -95,7 +98,7 @@ def encode_mmlu_example(
     return input_ids, attention_mask, position_ids
 
 
-def extract_answer_multiple_choice(text: str, start_tag="<|im_start|>") -> str | None:
+def extract_answer_multiple_choice(text: str, start_tag: str) -> str | None:
     text = text[text.rfind(start_tag) :]
 
     pattern = r"answer is \(?([A-J])\)?"
@@ -110,8 +113,12 @@ def extract_answer_multiple_choice(text: str, start_tag="<|im_start|>") -> str |
             return None
 
 
-def grade_multiple_choice(text: str, ground_truth_answer: str | None) -> bool:
-    answer = extract_answer_multiple_choice(text)
+def grade_multiple_choice(
+    text: str,
+    ground_truth_answer: str | None,
+    start_tag: str,
+) -> bool:
+    answer = extract_answer_multiple_choice(text, start_tag)
     if ground_truth_answer is None:
         return True
     elif answer is None:
