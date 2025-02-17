@@ -8,25 +8,9 @@ from transformers.models.llama.modeling_llama import (  # type: ignore
     apply_rotary_pos_emb,
     eager_attention_forward,
     logger,
-    repeat_kv,
 )
 
 from .snapkv_util import init_snapkv
-
-
-def undo_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-
-    num_key_value_heads = num_attention_heads // n_rep
-    return hidden_states.view(
-        batch,
-        num_key_value_heads,
-        n_rep,
-        seq_len,
-        head_dim,
-    ).mean(dim=2)
 
 
 class LlamaAttentionSnapKV(LlamaAttention):
@@ -57,21 +41,18 @@ class LlamaAttentionSnapKV(LlamaAttention):
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
 
-            if past_key_value.get_seq_length() == 0:  # [SnapKV] add kv_cluster
+            if past_key_value.get_seq_length(self.layer_idx) == 0:
+                print(
+                    self.layer_idx,
+                    key_states.shape,
+                    query_states.shape,
+                    value_states.shape,
+                )
                 key_states_compress, value_states_compress = self.kv_cluster.update_kv(  # type: ignore
-                    repeat_kv(key_states, self.num_key_value_groups),
+                    key_states,
                     query_states,
-                    repeat_kv(value_states, self.num_key_value_groups),
+                    value_states,
                     attention_mask,
-                )
-
-                key_states_compress = undo_repeat_kv(
-                    key_states_compress,
-                    self.num_key_value_groups,
-                )
-                value_states_compress = undo_repeat_kv(
-                    value_states_compress,
-                    self.num_key_value_groups,
                 )
 
                 past_key_value.update(
@@ -82,7 +63,10 @@ class LlamaAttentionSnapKV(LlamaAttention):
                 )
             else:
                 key_states, value_states = past_key_value.update(
-                    key_states, value_states, self.layer_idx, cache_kwargs
+                    key_states,
+                    value_states,
+                    self.layer_idx,
+                    cache_kwargs,
                 )
 
         attention_interface: Callable = eager_attention_forward

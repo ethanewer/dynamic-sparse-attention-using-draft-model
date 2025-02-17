@@ -20,6 +20,21 @@ class SnapKVCluster:
         self.kernel_size = kernel_size
         self.pooling = pooling
 
+    @staticmethod
+    def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
+        batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+
+        num_key_value_heads = num_attention_heads // n_rep
+        return hidden_states.view(
+            batch,
+            num_key_value_heads,
+            n_rep,
+            seq_len,
+            head_dim,
+        ).mean(dim=2)
+
     def update_kv(
         self,
         key_states: Tensor,
@@ -29,8 +44,18 @@ class SnapKVCluster:
     ):
         # check if prefix phase
         assert key_states.shape[-2] == query_states.shape[-2]
-        _, _, q_len, head_dim = query_states.shape
-        if q_len < self.max_capacity_prompt:
+
+        # average queries for group query attention
+        if query_states.shape[1] > key_states.shape[1]:
+            queries_per_key_value = query_states.shape[1] // key_states.shape[1]
+            query_states = self.pool_queries_for_gqa(
+                query_states,
+                queries_per_key_value,
+            )
+            assert query_states.shape[1] == key_states.shape[1]
+
+        _, _, seq_len, head_dim = query_states.shape
+        if seq_len < self.max_capacity_prompt:
             return key_states, value_states
         else:
             attention_weights = torch.matmul(
