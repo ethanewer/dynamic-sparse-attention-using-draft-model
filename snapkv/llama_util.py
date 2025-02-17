@@ -42,12 +42,12 @@ class LlamaAttentionSnapKV(LlamaAttention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
 
             if past_key_value.get_seq_length(self.layer_idx) == 0:
-                print(
-                    self.layer_idx,
-                    key_states.shape,
-                    query_states.shape,
-                    value_states.shape,
-                )
+                # print(
+                #     self.layer_idx,
+                #     key_states.shape,
+                #     query_states.shape,
+                #     value_states.shape,
+                # )
                 key_states_compress, value_states_compress = self.kv_cluster.update_kv(  # type: ignore
                     key_states,
                     query_states,
