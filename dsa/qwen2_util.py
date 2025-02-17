@@ -41,29 +41,33 @@ class Qwen2AttentionDSA(Qwen2Attention):
             )
 
         ################################ NEW CODE ################################
-        # if (
-        #     query_states.shape[0] == 1
-        #     and query_states.shape[2] == 1
-        #     and attention_mask is not None
-        #     and not output_attentions
-        # ):
-        #     bool_mask = attention_mask[0, 0, 0] >= 0
-        #     if not bool_mask.all():
-        #         key_states = key_states[:, :, bool_mask]
-        #         value_states = value_states[:, :, bool_mask]
-        #         attention_mask = None
         if (
-            query_states.shape[0] == 1
+            "dsa_k" in kwargs
             and query_states.shape[2] == 1
             and attention_mask is not None
             and not kwargs.get("output_attentions", False)
         ):
-            idxs = (attention_mask[0, 0, 0] >= 0).nonzero(as_tuple=True)[0]
-            if len(idxs) < key_states.shape[2]:
-                key_states = key_states[:, :, idxs]
-                value_states = value_states[:, :, idxs]
-
-            attention_mask = None
+            k = kwargs["dsa_k"]
+            if k < key_states.shape[2]:
+                indices = attention_mask[:, 0, 0].topk(k, dim=-1).indices
+                key_value_indices = indices[:, None, :, None].expand(
+                    -1,
+                    key_states.shape[1],
+                    -1,
+                    key_states.shape[3],
+                )
+                attention_mask_indices = indices[:, None, None, :].expand(
+                    -1,
+                    attention_mask.shape[1],
+                    attention_mask.shape[2],
+                    -1,
+                )
+                key_states = key_states.gather(dim=2, index=key_value_indices)
+                value_states = value_states.gather(dim=2, index=key_value_indices)
+                attention_mask = attention_mask.gather(
+                    dim=3,
+                    index=attention_mask_indices,
+                )
         ##########################################################################
 
         sliding_window = None

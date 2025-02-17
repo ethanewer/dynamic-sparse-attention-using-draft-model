@@ -17,9 +17,9 @@ def dsa_step(
     full_past_key_values: Cache,
     k: int,
 ) -> Tensor:
-    assert input_ids.shape == (1, 1)
-    assert attention_mask.ndim == 2 and attention_mask.shape[0] == 1
-    assert position_ids.shape == (1, 1)
+    assert input_ids.shape[1] == 1
+    assert attention_mask.ndim == 2
+    assert position_ids.shape[1] == 1
     assert cache_position.shape == (1,)
     k = min(k, attention_mask.shape[1])
     vocab_size = min(draft_model.config.vocab_size, full_model.config.vocab_size)
@@ -50,6 +50,7 @@ def dsa_step(
             cache_position=cache_position,
             past_key_values=full_past_key_values,
             use_cache=True,
+            dsa_k=k,
         )
 
     return full_outputs.logits[:, -1:, :vocab_size]

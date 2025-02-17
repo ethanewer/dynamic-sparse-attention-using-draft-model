@@ -7,6 +7,7 @@ from torch import Tensor
 
 QWEN_START_TAG = "<|im_start|>"
 LLAMA_START_TAG = "<|start_header_id|>"
+DEEPSEEK_LLAMA_START_TAG = "<｜Assistant｜>"
 
 
 def encode_longbench_example(

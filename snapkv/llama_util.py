@@ -8,10 +8,28 @@ from transformers.models.llama.modeling_llama import (  # type: ignore
     apply_rotary_pos_emb,
     eager_attention_forward,
     logger,
+    repeat_kv,
 )
 
+from .snapkv_util import init_snapkv
 
-class LlamaAttentionDSA(LlamaAttention):
+
+def undo_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+
+    num_key_value_heads = num_attention_heads // n_rep
+    return hidden_states.view(
+        batch,
+        num_key_value_heads,
+        n_rep,
+        seq_len,
+        head_dim,
+    ).mean(dim=2)
+
+
+class LlamaAttentionSnapKV(LlamaAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -21,6 +39,8 @@ class LlamaAttentionDSA(LlamaAttention):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+        init_snapkv(self)
+
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -36,9 +56,35 @@ class LlamaAttentionDSA(LlamaAttention):
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(
-                key_states, value_states, self.layer_idx, cache_kwargs
-            )
+
+            if past_key_value.get_seq_length() == 0:  # [SnapKV] add kv_cluster
+                key_states_compress, value_states_compress = self.kv_cluster.update_kv(  # type: ignore
+                    repeat_kv(key_states, self.num_key_value_groups),
+                    query_states,
+                    repeat_kv(value_states, self.num_key_value_groups),
+                    attention_mask,
+                    self.num_key_value_groups,
+                )
+
+                key_states_compress = undo_repeat_kv(
+                    key_states_compress,
+                    self.num_key_value_groups,
+                )
+                value_states_compress = undo_repeat_kv(
+                    value_states_compress,
+                    self.num_key_value_groups,
+                )
+
+                past_key_value.update(
+                    key_states_compress,
+                    value_states_compress,
+                    self.layer_idx,
+                    cache_kwargs,
+                )
+            else:
+                key_states, value_states = past_key_value.update(
+                    key_states, value_states, self.layer_idx, cache_kwargs
+                )
 
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
@@ -53,32 +99,6 @@ class LlamaAttentionDSA(LlamaAttention):
                 attention_interface = ALL_ATTENTION_FUNCTIONS[  # type: ignore
                     self.config._attn_implementation
                 ]
-
-        ################################ NEW CODE ################################
-        # if (
-        #     query_states.shape[0] == 1
-        #     and query_states.shape[2] == 1
-        #     and attention_mask is not None
-        #     and not output_attentions
-        # ):
-        #     bool_mask = attention_mask[0, 0, 0] >= 0
-        #     if not bool_mask.all():
-        #         key_states = key_states[:, :, bool_mask]
-        #         value_states = value_states[:, :, bool_mask]
-        #         attention_mask = None
-        if (
-            query_states.shape[0] == 1
-            and query_states.shape[2] == 1
-            and attention_mask is not None
-            and not kwargs.get("output_attentions", False)
-        ):
-            idxs = (attention_mask[0, 0, 0] >= 0).nonzero(as_tuple=True)[0]
-            if len(idxs) < key_states.shape[2]:
-                key_states = key_states[:, :, idxs]
-                value_states = value_states[:, :, idxs]
-
-            attention_mask = None
-        ##########################################################################
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -96,10 +116,10 @@ class LlamaAttentionDSA(LlamaAttention):
         return attn_output, attn_weights  # type: ignore
 
 
-def update_llama_model_for_dsa(model):
+def update_llama_model_for_snapkv(model):
     for i in range(len(model.model.layers)):
         attn_layer = model.model.layers[i].self_attn
-        attn_layer.forward = LlamaAttentionDSA.forward.__get__(
+        attn_layer.forward = LlamaAttentionSnapKV.forward.__get__(
             attn_layer,
             type(attn_layer),
         )
