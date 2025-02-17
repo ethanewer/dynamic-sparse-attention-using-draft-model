@@ -63,7 +63,6 @@ class LlamaAttentionSnapKV(LlamaAttention):
                     query_states,
                     repeat_kv(value_states, self.num_key_value_groups),
                     attention_mask,
-                    self.num_key_value_groups,
                 )
 
                 key_states_compress = undo_repeat_kv(
