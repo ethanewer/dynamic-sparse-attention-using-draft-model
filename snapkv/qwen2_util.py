@@ -2,9 +2,9 @@ from typing import Callable, Optional
 
 import torch
 from transformers import Cache  # type: ignore
-from transformers.models.llama.modeling_llama import (  # type: ignore
+from transformers.models.qwen2.modeling_qwen2 import (  # type: ignore
     ALL_ATTENTION_FUNCTIONS,
-    LlamaAttention,
+    Qwen2Attention,
     apply_rotary_pos_emb,
     eager_attention_forward,
     logger,
@@ -13,7 +13,7 @@ from transformers.models.llama.modeling_llama import (  # type: ignore
 from .snapkv_util import init_snapkv
 
 
-class LlamaAttentionSnapKV(LlamaAttention):
+class Qwen2AttentionSnapKV(Qwen2Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -63,6 +63,17 @@ class LlamaAttentionSnapKV(LlamaAttention):
                     cache_kwargs,
                 )
 
+        sliding_window = None
+        if (
+            self.config.use_sliding_window
+            and getattr(self.config, "sliding_window", None) is not None
+            and self.layer_idx >= self.config.max_window_layers
+        ):
+            # sliding_window = self.config.sliding_window
+            logger.warning_once(  # type: ignore
+                "Dynamic sparse attention is not compatible with sliding window."
+            )
+
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and kwargs.get(
@@ -85,6 +96,7 @@ class LlamaAttentionSnapKV(LlamaAttention):
             attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
+            sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
         )
 
@@ -93,9 +105,9 @@ class LlamaAttentionSnapKV(LlamaAttention):
         return attn_output, attn_weights  # type: ignore
 
 
-def update_llama_model_for_snapkv(model):
+def update_qwen2_model_for_snapkv(model):
     for i in range(len(model.model.layers)):
-        model.model.layers[i].self_attn.forward = LlamaAttentionSnapKV.forward.__get__(
+        model.model.layers[i].self_attn.forward = Qwen2AttentionSnapKV.forward.__get__(
             model.model.layers[i].self_attn,
             type(model.model.layers[i].self_attn),
         )
