@@ -13,7 +13,7 @@ class SnapKVCluster:
         max_capacity_prompt=2048,
         kernel_size=5,
         pooling="avgpool",
-    ):
+    ) -> None:
         self.window_size = window_size
         self.max_capacity_prompt = max_capacity_prompt
         assert self.max_capacity_prompt > self.window_size
@@ -41,7 +41,7 @@ class SnapKVCluster:
         query_states: Tensor,
         value_states: Tensor,
         attention_mask: Tensor,
-    ):
+    ) -> tuple[Tensor, Tensor]:
         # check if prefix phase
         assert key_states.shape[-2] == query_states.shape[-2]
 

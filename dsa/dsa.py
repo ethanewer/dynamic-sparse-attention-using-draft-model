@@ -22,7 +22,6 @@ def dsa_step(
     assert position_ids.shape[1] == 1
     assert cache_position.shape == (1,)
     k = min(k, attention_mask.shape[1])
-    vocab_size = min(draft_model.config.vocab_size, full_model.config.vocab_size)
 
     with torch.no_grad():
         draft_outputs = draft_model(
@@ -53,7 +52,7 @@ def dsa_step(
             dsa_k=k,
         )
 
-    return full_outputs.logits[:, -1:, :vocab_size]
+    return full_outputs.logits[:, -1:]
 
 
 def adaptive_dsa_prefill(
