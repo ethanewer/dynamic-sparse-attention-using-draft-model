@@ -1,7 +1,4 @@
-from typing import Any
-
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from transformers import (  # type: ignore
     DynamicCache,
@@ -13,13 +10,12 @@ from .llama_util import update_llama_model_for_snapkv
 from .qwen2_util import update_qwen2_model_for_snapkv
 
 
-def snapkv_generate(
+def snapkv_experiment(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
-    attention_mask: Tensor,
+    generated_ids: Tensor,
     window_size: int,
     max_capacity_prompt: int,
-    generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
         update_llama_model_for_snapkv(model)
@@ -31,22 +27,37 @@ def snapkv_generate(
     model.config.max_capacity_prompt = max_capacity_prompt
     model.config.window_size = window_size
 
-    return model.generate(  # type: ignore
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        use_cache=True,
-        **generation_kwargs,
-    )
+    input_len = input_ids.shape[1]
+
+    position_ids = None
+    past_key_values = DynamicCache()
+
+    logits = []
+    for i in range(input_len, generated_ids.shape[1]):
+        with torch.no_grad():
+            outputs = model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+
+        input_ids = generated_ids[:, i : i + 1]
+        position_ids = torch.tensor([[i]], device=input_ids.device)
+
+        if i > input_len:
+            logits.append(outputs.logits[0, -1:])
+
+    return torch.cat(logits).float().cpu()
 
 
-def lookahead_snapkv_generate(
+def lookahead_snapkv_experiment(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
-    attention_mask: Tensor,
     lookahead_ids: Tensor,
+    generated_ids: Tensor,
     window_size: int,
     max_capacity_prompt: int,
-    generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
         update_llama_model_for_snapkv(model)
@@ -55,32 +66,39 @@ def lookahead_snapkv_generate(
     else:
         raise NotImplementedError()
 
+    input_len = input_ids.shape[1]
     lookahead_size = lookahead_ids.shape[1] - input_ids.shape[1]
 
     model.config.max_capacity_prompt = max_capacity_prompt + lookahead_size + 1
     model.config.window_size = window_size + lookahead_size + 1
 
-    extended_attention_mask = F.pad(attention_mask, (0, lookahead_size), value=1)
-
     past_key_values = DynamicCache()
+
+    assert (input_ids == generated_ids[:, :input_len]).all()
 
     with torch.no_grad():
         _ = model(
             input_ids=lookahead_ids,
-            attention_mask=extended_attention_mask,
             past_key_values=past_key_values,
             use_cache=True,
         )
 
     past_key_values.crop(max_capacity_prompt)
-    del extended_attention_mask
 
-    generated_ids = model.generate(
-        input_ids=input_ids[:, -max_capacity_prompt - 1 :],
-        attention_mask=attention_mask,
-        use_cache=True,
-        past_key_values=past_key_values,
-        **generation_kwargs,
-    )
+    logits = []
+    for i in range(input_len, generated_ids.shape[1]):
+        input_ids = generated_ids[:, i - 1 : i]
+        position_ids = torch.tensor([[i - 1]], device=input_ids.device)
 
-    return torch.cat((input_ids[:, : -max_capacity_prompt - 1], generated_ids), dim=1)  # type: ignore
+        with torch.no_grad():
+            outputs = model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+
+        if i > input_len:
+            logits.append(outputs.logits[0, -1:])
+
+    return torch.cat(logits).float().cpu()
