@@ -7,6 +7,8 @@ from transformers import (  # type: ignore
     LlamaForCausalLM,
     Qwen2ForCausalLM,
 )
+from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
+from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
 
@@ -16,6 +18,15 @@ def generate_reduced_attentions(
     input_ids: Tensor,
     generation_kwargs: dict[str, Any] = {},
 ) -> tuple[Tensor, Tensor]:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
     input_len = input_ids.shape[1]
     past_key_values = DynamicCache()
 
@@ -64,6 +75,15 @@ def dynamic_attention_sinks_generate(
     k: int,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_ids, device=input_ids.device)[None]  # type: ignore
