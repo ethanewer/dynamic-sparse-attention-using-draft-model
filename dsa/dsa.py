@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.nn.functional as F
@@ -12,7 +12,7 @@ def dsa_step(
     input_ids: Tensor,
     attention_mask: Tensor,
     position_ids: Tensor,
-    cache_position: Tensor,
+    cache_position: Optional[Tensor],
     draft_past_key_values: Cache,
     full_past_key_values: Cache,
     k: int,
@@ -20,7 +20,7 @@ def dsa_step(
     assert input_ids.shape[1] == 1
     assert attention_mask.ndim == 2
     assert position_ids.shape[1] == 1
-    assert cache_position.shape == (1,)
+    assert cache_position is None or cache_position.shape == (1,)
     k = min(k, attention_mask.shape[1])
 
     with torch.no_grad():

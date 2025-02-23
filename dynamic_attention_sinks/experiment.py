@@ -2,6 +2,9 @@ from typing import Callable
 
 import torch
 from torch import Tensor
+from transformers import LlamaForCausalLM, Qwen2ForCausalLM  # type: ignore
+from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
+from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
 
@@ -13,6 +16,15 @@ def streaming_llm_experiment(
     window_size: int,
     n_sinks: int,
 ) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
@@ -78,6 +90,15 @@ def dynamic_attention_sinks_experiment(
     block_size: int,
     k: int,
 ) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_len, device=input_ids.device)[None]

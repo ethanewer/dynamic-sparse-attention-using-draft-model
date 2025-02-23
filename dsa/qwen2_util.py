@@ -121,3 +121,14 @@ def update_qwen2_model_for_dsa(model):
         )
 
     return model
+
+
+def reset_qwen2_model(model):
+    for i in range(len(model.model.layers)):
+        attn_layer = model.model.layers[i].self_attn
+        attn_layer.forward = Qwen2Attention.forward.__get__(
+            attn_layer,
+            type(attn_layer),
+        )
+
+    return model
