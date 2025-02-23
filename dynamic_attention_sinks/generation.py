@@ -51,8 +51,6 @@ def generate_reduced_attentions(
 
     del outputs
 
-    attention_matrix = torch.cat(attention_scores, dim=0)
-    print(input_len, sequences.shape[1] - input_len, attention_matrix.shape)
     reduced_attentions = torch.cat(attention_scores, dim=0).sum(dim=0).sqrt()
     return sequences, reduced_attentions
 
