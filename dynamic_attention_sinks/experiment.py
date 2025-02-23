@@ -10,57 +10,59 @@ def streaming_llm_experiment(
     model: Callable,
     input_ids: Tensor,
     generated_ids: Tensor,
-    block_size: int,
-    k: int,
+    window_size: int,
+    n_sinks: int,
 ) -> Tensor:
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
 
-    k = min(k, input_len - block_size)
-    sink_indices = list(range(k))
-    cache_seq_indices = []
+    mask = torch.ones(input_len, input_len).tril()
+    mask[window_size:, :-window_size] -= torch.ones(
+        input_len - window_size, input_len - window_size
+    ).tril()
+
+    n_sinks = min(n_sinks, input_len)
+    for i in range(n_sinks):
+        mask[:, i] = 1
+
+    mask.tril_()
+
+    mask_4d = -3.4028e38 * (1 - mask[None, None, :, :]).to(
+        input_ids.device,
+        model.dtype,  # type: ignore
+    )
+
     past_key_values = TokenDroppingCache()
-
-    for i in range(0, input_ids.shape[1], block_size):
-        j = min(i + block_size, input_ids.shape[1])
-        block_input_ids = input_ids[:, i:j]
-        block_position_ids = position_ids[:, i:j]
-
-        with torch.no_grad():
-            outputs = model(
-                input_ids=block_input_ids,
-                position_ids=block_position_ids,
-                use_cache=True,
-                past_key_values=past_key_values,
-            )
-
-        cache_seq_indices += list(range(i, j))
-        selected_indices = []
-        new_cache_seq_indices = []
-        for cache_idx, seq_idx in enumerate(cache_seq_indices):
-            if seq_idx in sink_indices or seq_idx >= j - block_size:
-                selected_indices.append(cache_idx)
-                new_cache_seq_indices.append(seq_idx)
-
-        past_key_values.token_select_indices(
-            torch.tensor(selected_indices, device=input_ids.device)
+    with torch.no_grad():
+        _ = model(
+            input_ids=input_ids,
+            attention_mask=mask_4d,
+            use_cache=True,
+            past_key_values=past_key_values,
         )
-        cache_seq_indices = new_cache_seq_indices
-
-    assert past_key_values.get_seq_length() == min(block_size + k, input_len)
 
     logits = []
     for i in range(input_len + 1, generated_ids.shape[1]):
         input_ids = generated_ids[:, i - 1 : i]
         position_ids = torch.tensor([[i - 1]], device=input_ids.device)
 
+        if past_key_values.get_seq_length() >= window_size + n_sinks:
+            sink_indices = list(range(n_sinks))
+            window_indices = list(
+                range(
+                    past_key_values.get_seq_length() - window_size + 1,
+                    past_key_values.get_seq_length(),
+                )
+            )
+            past_key_values.token_select_indices(sink_indices + window_indices)
+
         with torch.no_grad():
             outputs = model(
                 input_ids=input_ids,
                 position_ids=position_ids,
-                past_key_values=past_key_values,
                 use_cache=True,
+                past_key_values=past_key_values,
             )
 
         logits.append(outputs.logits[0, -1:])
@@ -111,7 +113,7 @@ def dynamic_attention_sinks_experiment(
         )
         cache_seq_indices = new_cache_seq_indices
 
-    assert past_key_values.get_seq_length() == block_size + k
+    assert past_key_values.get_seq_length() == min(block_size + k, input_len)
 
     logits = []
     for i in range(input_len + 1, generated_ids.shape[1]):
@@ -122,8 +124,8 @@ def dynamic_attention_sinks_experiment(
             outputs = model(
                 input_ids=input_ids,
                 position_ids=position_ids,
-                past_key_values=past_key_values,
                 use_cache=True,
+                past_key_values=past_key_values,
             )
 
         logits.append(outputs.logits[0, -1:])
