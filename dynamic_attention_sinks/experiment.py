@@ -177,17 +177,36 @@ def dynamic_attention_sinks_v2_experiment(
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
 
     k = min(k, input_len - block_size)
-    sink_indices: list[list[int]] = [[]]
-    for i in range(block_size, input_len, block_size):
-        indices = sink_indices[-1] + list(
-            range(i - block_size, min(i, input_len - block_size))
-        )
-        a = reduced_attention_matrix[i + block_size :, indices].square().sum(dim=0)
-        sink_indices.append([indices[i] for i in a.topk(k).indices])
+    sink_indices: list[list[int]] = [
+        reduced_attention_matrix[input_len:, : input_len - block_size]
+        .square()
+        .sum(dim=0)
+        .topk(k)
+        .indices.tolist()
+    ]
+
+    for i in range((input_len + block_size - 1) // block_size - 2, -1, -1):
+        prev_indices = [j for j in sink_indices[-1] if j in range(i * block_size)]
+        indices = [j for j in range(i * block_size) if j not in sink_indices[-1]]
+        if indices:
+            block_start = i + block_size
+            block_end = min((i + 1) * block_size, input_ids.shape[1])
+            a = (
+                reduced_attention_matrix[block_start:block_end, indices]
+                .square()
+                .sum(dim=0)
+            )
+            sink_indices.append(
+                prev_indices
+                + [indices[i] for i in a.topk(k - len(prev_indices)).indices]
+            )
+        else:
+            sink_indices.append(prev_indices)
+
+    sink_indices = sink_indices[::-1]
 
     cache_seq_indices = []
     past_key_values = TokenDroppingCache()
-    print(reduced_attention_matrix.shape)
 
     for i, indices in enumerate(sink_indices):
         block_start = i * block_size
