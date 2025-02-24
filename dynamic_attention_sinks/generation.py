@@ -130,3 +130,44 @@ def dynamic_attention_sinks_generate(
     )
 
     return torch.cat((input_ids[:, : -cache_size - 1], generated_ids), dim=1)
+
+
+def generate_reduced_attention_matrix(
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
+    input_ids: Tensor,
+    generation_kwargs: dict[str, Any] = {},
+) -> tuple[Tensor, Tensor]:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
+    input_len = input_ids.shape[1]
+    past_key_values = DynamicCache()
+
+    outputs = model.generate(
+        input_ids,
+        output_attentions=True,
+        use_cache=True,
+        past_key_values=past_key_values,
+        return_dict_in_generate=True,
+        **generation_kwargs,
+    )
+
+    sequences: Tensor = outputs.sequences  # type: ignore
+
+    reduced_attention_matrix = torch.cat(
+        [
+            torch.cat([a[0, :, :, :input_len].cpu() for a in attentions])
+            .square()
+            .sum(dim=0)
+            .sqrt()
+            for attentions in outputs.attentions  # type: ignore
+        ]
+    )
+
+    return sequences, reduced_attention_matrix
