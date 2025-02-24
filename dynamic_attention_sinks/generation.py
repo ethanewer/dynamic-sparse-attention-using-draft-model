@@ -69,7 +69,6 @@ def generate_reduced_attentions(
 def dynamic_attention_sinks_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
-    generated_ids: Tensor,
     reduced_attentions: Tensor,
     block_size: int,
     k: int,
@@ -122,7 +121,7 @@ def dynamic_attention_sinks_generate(
     cache_size = min(block_size + k, input_len - 1)
     assert past_key_values.get_seq_length() == cache_size
 
-    generated_ids = model.generate(  # type: ignore
+    generated_ids: Tensor = model.generate(  # type: ignore
         input_ids=input_ids[:, -cache_size - 1 :],
         attention_mask=torch.ones_like(input_ids),
         use_cache=True,
