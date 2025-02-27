@@ -13,7 +13,6 @@ class TokenDroppingCache(DynamicCache):
         num_key_value_heads = self.key_cache[layer_idx if layer_idx else 0].shape[1]
         head_dim = self.key_cache[layer_idx if layer_idx else 0].shape[-1]
 
-        # print(indices.shape)
         if indices.ndim == 1:
             indices = indices[None, None, :, None].expand(
                 batch_size,
@@ -30,10 +29,6 @@ class TokenDroppingCache(DynamicCache):
             )
         elif indices.ndim == 3:
             indices = indices[..., None].expand(-1, -1, -1, head_dim)
-
-        # print(indices.shape)
-
-        #  print(indices[0, 0, :, 0])
 
         assert (
             indices.shape[:2] == self.key_cache[layer_idx if layer_idx else 0].shape[:2]
