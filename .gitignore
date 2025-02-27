@@ -4,3 +4,4 @@ mmlu_val_1.json
 .DS_Store
 __pycache__*
 synthetic*
+.vscode

@@ -5,7 +5,6 @@ from .experiment import (
 )
 from .generation import (
     dynamic_attention_sinks_generate,
-    generate_reduced_attention_matrix,
     generate_reduced_attentions,
 )
 from .token_dropping_cache import TokenDroppingCache
@@ -17,5 +16,4 @@ __all__ = [
     "streaming_llm_experiment",
     "dynamic_attention_sinks_generate",
     "generate_reduced_attentions",
-    "generate_reduced_attention_matrix",
 ]

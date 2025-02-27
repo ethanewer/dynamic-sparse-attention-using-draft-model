@@ -17,7 +17,7 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generation_kwargs: dict[str, Any] = {},
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, list[Tensor]]:
     if isinstance(model, LlamaForCausalLM):
         for layer in model.model.layers:
             assert isinstance(layer.self_attn, LlamaAttention)
@@ -53,16 +53,25 @@ def generate_reduced_attentions(
         for y in x:
             assert y.shape[2] == 1, y.shape
 
-    attention_scores: list[Tensor] = [
-        torch.cat([a[0, :, :, :input_len].cpu() for a in attentions])
+    reduced_attentions: list[Tensor] = [
+        torch.cat([a[i][..., :input_len] for a in outputs.attentions], dim=2)  # type: ignore
         .square()
-        .sum(dim=0)
-        for attentions in outputs.attentions  # type: ignore
+        .sum(dim=2)
+        for i in range(model.config.num_hidden_layers)
     ]
 
-    del outputs
+    num_queries = model.config.num_attention_heads // model.config.num_key_value_heads
+    if num_queries > 1:
+        reduced_attentions = [
+            a.view(
+                input_ids.shape[0],
+                model.config.num_key_value_heads,
+                num_queries,
+                input_len,
+            ).mean(dim=2)
+            for a in reduced_attentions
+        ]
 
-    reduced_attentions = torch.cat(attention_scores, dim=0).sum(dim=0).sqrt()
     return sequences, reduced_attentions
 
 
@@ -130,44 +139,3 @@ def dynamic_attention_sinks_generate(
     )
 
     return torch.cat((input_ids[:, : -cache_size - 1], generated_ids), dim=1)
-
-
-def generate_reduced_attention_matrix(
-    model: LlamaForCausalLM | Qwen2ForCausalLM,
-    input_ids: Tensor,
-    generation_kwargs: dict[str, Any] = {},
-) -> tuple[Tensor, Tensor]:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
-    input_len = input_ids.shape[1]
-    past_key_values = DynamicCache()
-
-    outputs = model.generate(
-        input_ids,
-        output_attentions=True,
-        use_cache=True,
-        past_key_values=past_key_values,
-        return_dict_in_generate=True,
-        **generation_kwargs,
-    )
-
-    sequences: Tensor = outputs.sequences  # type: ignore
-
-    reduced_attention_matrix = torch.cat(
-        [
-            torch.cat([a[0, :, :, :input_len].cpu() for a in attentions])
-            .square()
-            .sum(dim=0)
-            .sqrt()
-            for attentions in outputs.attentions  # type: ignore
-        ]
-    )
-
-    return sequences, reduced_attention_matrix
