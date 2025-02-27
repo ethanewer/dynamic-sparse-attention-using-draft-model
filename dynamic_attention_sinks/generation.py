@@ -17,7 +17,7 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generation_kwargs: dict[str, Any] = {},
-) -> tuple[Tensor, list[Tensor]]:
+) -> tuple[Tensor, Tensor]:
     if isinstance(model, LlamaForCausalLM):
         for layer in model.model.layers:
             assert isinstance(layer.self_attn, LlamaAttention)
@@ -72,7 +72,7 @@ def generate_reduced_attentions(
             for a in reduced_attentions
         ]
 
-    return sequences, reduced_attentions
+    return sequences, torch.stack(reduced_attentions)
 
 
 def dynamic_attention_sinks_generate(

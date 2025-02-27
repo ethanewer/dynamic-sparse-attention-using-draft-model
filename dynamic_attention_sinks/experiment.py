@@ -7,6 +7,9 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
+from .sink_indices_util import get_sink_indices
+
+from tqdm.notebook import trange
 
 
 def streaming_llm_experiment(
@@ -84,37 +87,11 @@ def streaming_llm_experiment(
     return torch.cat(logits).float().cpu()
 
 
-def get_sink_indices_for_single_head(
-    reduced_attentions: Tensor,
-    k: int,
-    block_size: int,
-    input_len: int,
-) -> list[list[int]]:
-    assert reduced_attentions.shape == (input_len,)
-
-    sink_indices: list[list[int]] = [
-        reduced_attentions[: input_len - block_size].topk(k).indices.tolist()
-    ]
-    for i in range((input_len + block_size - 1) // block_size - 2, -1, -1):
-        prev_indices = [j for j in sink_indices[-1] if j in range(i * block_size)]
-        indices = [j for j in range(i * block_size) if j not in sink_indices[-1]]
-        if indices:
-            a = reduced_attentions[indices].square()
-            sink_indices.append(
-                prev_indices
-                + [indices[i] for i in a.topk(k - len(prev_indices)).indices]
-            )
-        else:
-            sink_indices.append(prev_indices)
-
-    return sink_indices[::-1]
-
-
 def dynamic_attention_sinks_experiment(
     model: Callable,
     input_ids: Tensor,
     generated_ids: Tensor,
-    reduced_attentions: list[Tensor],
+    reduced_attentions: Tensor,
     block_size: int,
     k: int,
 ) -> Tensor:
@@ -133,16 +110,42 @@ def dynamic_attention_sinks_experiment(
 
     k = min(k, input_len - block_size)
 
-    fully_reduced_attention = torch.cat(reduced_attentions, dim=1).sum(dim=1)
-    sink_indices: list[list[list[int]]] = [
-        get_sink_indices_for_single_head(
-            fully_reduced_attention[batch_idx],
-            k=k,
-            block_size=block_size,
-            input_len=input_len,
-        )
-        for batch_idx in range(input_ids.shape[0])
-    ]
+    # sink_indices: list[list[list[int]]] = [
+    #     get_sink_indices_for_single_head(
+    #         fully_reduced_attention[batch_idx],
+    #         k=k,
+    #         block_size=block_size,
+    #         input_len=input_len,
+    #     )
+    #     for batch_idx in range(input_ids.shape[0])
+    # ]
+
+    sink_indices = get_sink_indices(
+        reduced_attentions.sum(dim=[0, 2])[None, :, None],
+        k=k,
+        block_size=block_size,
+    )[0, :, 0]
+
+    # import matplotlib.pyplot as plt
+
+    # mask_ = torch.zeros(input_len, input_len)
+    # for i_ in range(0, input_len, block_size):
+    #     mask_[i_ : i_ + 2 * block_size, i_ : i_ + block_size] = 1
+
+    # for i_, indices_ in enumerate(sink_indices[0][:-1]):
+    #     print(indices_)
+    #     mask_[(i_ + 1) * block_size : (i_ + 2) * block_size, indices_] = 1
+
+    # mask_.tril_()
+    # plt.imshow(mask_, cmap="gray_r", extent=(0, mask_.shape[1], 0, mask_.shape[0]))
+    # plt.xticks(
+    #     torch.arange(0, mask_.shape[1] + 1, 1), labels=" " * (mask_.shape[1] + 1)
+    # )
+    # plt.yticks(
+    #     torch.arange(0, mask_.shape[0] + 1, 1), labels=" " * (mask_.shape[0] + 1)
+    # )
+    # plt.grid()
+    # plt.show()
 
     # past_key_values = TokenDroppingCache()
     # cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
@@ -185,9 +188,11 @@ def dynamic_attention_sinks_experiment(
     past_key_values = TokenDroppingCache()
     cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
 
-    for block_idx in range((input_len + block_size - 1) // block_size):
+    for block_idx in trange(
+        (input_len + block_size - 1) // block_size, desc="block prefill"
+    ):
         block_start = block_idx * block_size
-        block_end = min((block_idx + 1) * block_size, input_ids.shape[1])
+        block_end = min((block_idx + 1) * block_size, input_len)
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
 
@@ -248,7 +253,7 @@ def dynamic_attention_sinks_v2_experiment(
     model: Callable,
     input_ids: Tensor,
     generated_ids: Tensor,
-    reduced_attentions: list[Tensor],
+    reduced_attentions: Tensor,
     block_size: int,
     k: int,
 ) -> Tensor:
@@ -278,20 +283,24 @@ def dynamic_attention_sinks_v2_experiment(
     #     for batch_idx in range(input_ids.shape[0])
     # ]
 
-    sink_indices: list[list[list[list[list[int]]]]] = []
-    for layer_idx in range(model.config.num_hidden_layers):
-        sink_indices.append([])
-        for batch_idx in range(input_ids.shape[0]):
-            sink_indices[layer_idx].append([])
-            for head_idx in range(model.config.num_key_value_heads):
-                sink_indices[layer_idx][batch_idx].append(
-                    get_sink_indices_for_single_head(
-                        reduced_attentions[layer_idx][batch_idx, head_idx],
-                        k=k,
-                        block_size=block_size,
-                        input_len=input_len,
-                    )
-                )
+    # sink_indices: list[list[list[list[list[int]]]]] = []
+    # for layer_idx in range(model.config.num_hidden_layers):
+    #     sink_indices.append([])
+    #     for batch_idx in range(input_ids.shape[0]):
+    #         sink_indices[layer_idx].append([])
+    #         for head_idx in range(model.config.num_key_value_heads):
+    #             sink_indices[layer_idx][batch_idx].append(
+    #                 get_sink_indices_for_single_head(
+    #                     reduced_attentions[layer_idx][batch_idx, head_idx],
+    #                     k=k,
+    #                     block_size=block_size,
+    #                     input_len=input_len,
+    #                 )
+    #             )
+
+    print("    a")
+
+    sink_indices = get_sink_indices(reduced_attentions, k=k, block_size=block_size)
 
     # for layer_idx in range(model.config.num_hidden_layers):
     #     for batch_idx in range(input_ids.shape[0]):
@@ -300,6 +309,8 @@ def dynamic_attention_sinks_v2_experiment(
     #                 sink_indices[layer_idx][batch_idx][head_idx]
     #                 == sink_indices_control[batch_idx]
     #             )
+
+    print("    b")
 
     past_key_values = TokenDroppingCache()
 
@@ -312,7 +323,9 @@ def dynamic_attention_sinks_v2_experiment(
     # past_key_values_control = TokenDroppingCache()
     # cache_seq_indices_control: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
 
-    for block_idx in range((input_len + block_size - 1) // block_size):
+    for block_idx in trange(
+        (input_len + block_size - 1) // block_size, desc="block prefill v2"
+    ):
         block_start = block_idx * block_size
         block_end = min((block_idx + 1) * block_size, input_ids.shape[1])
         block_input_ids = input_ids[:, block_start:block_end]
@@ -383,6 +396,7 @@ def dynamic_attention_sinks_v2_experiment(
                                 head_idx
                             ].append(seq_idx)
 
+        print("        c")
         # for layer_idx in range(model.config.num_hidden_layers):
         #     for batch_idx in range(input_ids.shape[0]):
         #         for head_idx in range(model.config.num_key_value_heads):
@@ -405,6 +419,7 @@ def dynamic_attention_sinks_v2_experiment(
         #                 cache_seq_indices[layer_idx][batch_idx][head_idx]
         #                 == cache_seq_indices_control[batch_idx]
         #             )
+        print("        d")
 
     assert past_key_values.get_seq_length() == block_size + k
 
