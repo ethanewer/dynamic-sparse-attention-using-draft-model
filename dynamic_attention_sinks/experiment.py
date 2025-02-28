@@ -11,7 +11,7 @@ from .sink_indices_util import get_sink_indices, update_indices
 
 from tqdm.notebook import trange  # type: ignore
 
-# import time
+import time
 
 
 def streaming_llm_experiment(
@@ -197,6 +197,7 @@ def dynamic_attention_sinks_experiment(
         block_end = min((block_idx + 1) * block_size, input_len)
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
+        t0 = time.time()
 
         with torch.no_grad():
             outputs = model(
@@ -205,6 +206,8 @@ def dynamic_attention_sinks_experiment(
                 use_cache=True,
                 past_key_values=past_key_values,
             )
+
+        t1 = time.time()
 
         selected_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
         new_cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
@@ -217,8 +220,15 @@ def dynamic_attention_sinks_experiment(
                     selected_indices[batch_idx].append(cache_idx)
                     new_cache_seq_indices[batch_idx].append(seq_idx)
 
+        t2 = time.time()
+
         past_key_values.token_select_indices(
             torch.tensor(selected_indices, device=input_ids.device)
+        )
+
+        t3 = time.time()
+        print(
+            f"(v1) model forward: {t1 - t0:.3f}s, update indices: {t2 - t1:.3f}s, trim cache: {t3 - t2:.3f}s,"
         )
 
         cache_seq_indices = new_cache_seq_indices
@@ -293,7 +303,7 @@ def dynamic_attention_sinks_v2_experiment(
         block_end = min((block_idx + 1) * block_size, input_ids.shape[1])
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
-        # t0 = time.time()
+        t0 = time.time()
 
         with torch.no_grad():
             _ = model(
@@ -303,7 +313,7 @@ def dynamic_attention_sinks_v2_experiment(
                 past_key_values=past_key_values,
             )
 
-        # t1 = time.time()
+        t1 = time.time()
 
         selected_indices, cache_seq_indices = update_indices(
             sink_indices=sink_indices,
@@ -316,8 +326,8 @@ def dynamic_attention_sinks_v2_experiment(
 
         selected_indices = selected_indices.to(input_ids.device)
 
-        # t2 = time.time()
-        # print(block_size, k, block_idx, len(selected_indices[0][0][0]))
+        t2 = time.time()
+        print(block_size, k, block_idx, len(selected_indices[0][0][0]))
 
         for layer_idx in range(model.config.num_hidden_layers):
             past_key_values.token_select_indices(
@@ -325,10 +335,10 @@ def dynamic_attention_sinks_v2_experiment(
                 layer_idx=layer_idx,
             )
 
-        # t3 = time.time()
-        # print(
-        #     f"model forward: {t1 - t0:.3f}s, update indices: {t2 - t1:.3f}s, trim cache: {t3 - t2:.3f}s,"
-        # )
+        t3 = time.time()
+        print(
+            f"(v2) model forward: {t1 - t0:.3f}s, update indices: {t2 - t1:.3f}s, trim cache: {t3 - t2:.3f}s,"
+        )
 
     assert past_key_values.get_seq_length() == block_size + k
 

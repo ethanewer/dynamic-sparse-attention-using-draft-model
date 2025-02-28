@@ -150,6 +150,82 @@ def update_indices_numba(
     return selected_indices, new_cache_seq_indices
 
 
+def update_indices_torch(
+    sink_indices: torch.Tensor,
+    cache_seq_indices: torch.Tensor,
+    block_idx: int,
+    block_size: int,
+    k: int,
+    input_len: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    device = sink_indices.device
+
+    block_start = block_idx * block_size
+    block_end = min((block_idx + 1) * block_size, input_len)
+    real_block_size = block_end - block_start
+
+    num_hidden_layers, batch_size, num_key_value_heads = sink_indices.shape[:3]
+
+    print(f"{device=}, {num_hidden_layers=}, {batch_size=}, {num_key_value_heads=}")
+
+    n_indices = min((block_idx + 1) * block_size, block_size + k)
+
+    selected_indices = torch.full(
+        (num_hidden_layers, batch_size, num_key_value_heads, n_indices),
+        -1,
+        dtype=torch.int64,
+        device=device,
+    )
+
+    new_cache_seq_indices = torch.full(
+        (num_hidden_layers, batch_size, num_key_value_heads, n_indices),
+        -1,
+        dtype=torch.int64,
+        device=device,
+    )
+
+    for layer_idx in range(num_hidden_layers):
+        for batch_idx in range(batch_size):
+            for head_idx in range(num_key_value_heads):
+                indices = sink_indices[layer_idx, batch_idx, head_idx, block_idx]
+                seq_indices = cache_seq_indices[layer_idx, batch_idx, head_idx]
+
+                mask_recent = seq_indices >= block_end - block_size
+                mask_in_sink = torch.isin(seq_indices, indices)
+
+                valid_indices = torch.where(mask_recent | mask_in_sink)[0]
+
+                new_cache_idx = len(valid_indices)
+
+                selected_indices[
+                    layer_idx,
+                    batch_idx,
+                    head_idx,
+                    :new_cache_idx,
+                ] = valid_indices
+
+                new_cache_seq_indices[
+                    layer_idx,
+                    batch_idx,
+                    head_idx,
+                    :new_cache_idx,
+                ] = seq_indices[valid_indices]
+
+    selected_indices[:, :, :, -real_block_size:] = torch.arange(
+        cache_seq_indices.shape[3],
+        cache_seq_indices.shape[3] + real_block_size,
+        device=device,
+    )
+
+    new_cache_seq_indices[:, :, :, -real_block_size:] = torch.arange(
+        block_start,
+        block_end,
+        device=device,
+    )
+
+    return selected_indices, new_cache_seq_indices
+
+
 def update_indices(
     sink_indices: Tensor,
     cache_seq_indices: Tensor,
@@ -157,13 +233,26 @@ def update_indices(
     block_size: int,
     k: int,
     input_len: int,
+    use_torch=False,
 ) -> tuple[Tensor, Tensor]:
-    selected_indices, new_cache_seq_indices = update_indices_numba(
-        sink_indices=sink_indices.numpy(),
-        cache_seq_indices=cache_seq_indices.numpy(),
-        block_idx=block_idx,
-        block_size=block_size,
-        k=k,
-        input_len=input_len,
-    )
-    return torch.from_numpy(selected_indices), torch.from_numpy(new_cache_seq_indices)
+    if use_torch:
+        return update_indices_torch(
+            sink_indices=sink_indices,
+            cache_seq_indices=cache_seq_indices,
+            block_idx=block_idx,
+            block_size=block_size,
+            k=k,
+            input_len=input_len,
+        )
+    else:
+        selected_indices, new_cache_seq_indices = update_indices_numba(
+            sink_indices=sink_indices.numpy(),
+            cache_seq_indices=cache_seq_indices.numpy(),
+            block_idx=block_idx,
+            block_size=block_size,
+            k=k,
+            input_len=input_len,
+        )
+        return torch.from_numpy(selected_indices), torch.from_numpy(
+            new_cache_seq_indices
+        )

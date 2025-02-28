@@ -11,6 +11,7 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
+from .sink_indices_util import get_sink_indices, update_indices
 
 
 def generate_reduced_attentions(
@@ -97,14 +98,21 @@ def dynamic_attention_sinks_generate(
     position_ids = torch.arange(input_ids, device=input_ids.device)[None]  # type: ignore
 
     k = min(k, input_len - block_size)
-    sink_indices = reduced_attentions[: input_len - block_size].topk(k).indices.tolist()
-    cache_seq_indices = []
-    past_key_values = TokenDroppingCache()
 
-    for i in range(0, input_ids.shape[1] - 1, block_size):
-        j = min(i + block_size, input_ids.shape[1] - 1)
-        block_input_ids = input_ids[:, i:j]
-        block_position_ids = position_ids[:, i:j]
+    sink_indices = get_sink_indices(
+        reduced_attentions.sum(dim=[0, 2])[None, :, None],
+        k=k,
+        block_size=block_size,
+    )[0, :, 0]
+
+    past_key_values = TokenDroppingCache()
+    cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
+
+    for block_idx in range((input_len + block_size - 1) // block_size):
+        block_start = block_idx * block_size
+        block_end = min((block_idx + 1) * block_size, input_len)
+        block_input_ids = input_ids[:, block_start:block_end]
+        block_position_ids = position_ids[:, block_start:block_end]
 
         with torch.no_grad():
             _ = model(
@@ -114,18 +122,100 @@ def dynamic_attention_sinks_generate(
                 past_key_values=past_key_values,
             )
 
-        cache_seq_indices += list(range(i, j))
-        selected_indices = []
-        new_cache_seq_indices = []
-        for cache_idx, seq_idx in enumerate(cache_seq_indices):
-            if seq_idx in sink_indices or seq_idx >= j - block_size:
-                selected_indices.append(cache_idx)
-                new_cache_seq_indices.append(seq_idx)
+        selected_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
+        new_cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
+        for batch_idx in range(input_ids.shape[0]):
+            indices = sink_indices[batch_idx][block_idx]
+
+            cache_seq_indices[batch_idx] += list(range(block_start, block_end))
+            for cache_idx, seq_idx in enumerate(cache_seq_indices[batch_idx]):
+                if seq_idx in indices or seq_idx >= block_end - block_size:
+                    selected_indices[batch_idx].append(cache_idx)
+                    new_cache_seq_indices[batch_idx].append(seq_idx)
 
         past_key_values.token_select_indices(
             torch.tensor(selected_indices, device=input_ids.device)
         )
+
         cache_seq_indices = new_cache_seq_indices
+
+    cache_size = min(block_size + k, input_len - 1)
+    assert past_key_values.get_seq_length() == cache_size
+
+    generated_ids: Tensor = model.generate(  # type: ignore
+        input_ids=input_ids[:, -cache_size - 1 :],
+        attention_mask=torch.ones_like(input_ids),
+        use_cache=True,
+        past_key_values=past_key_values,
+        **generation_kwargs,
+    )
+
+    return torch.cat((input_ids[:, : -cache_size - 1], generated_ids), dim=1)
+
+
+def dynamic_attention_sinks_generate_v2(
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
+    input_ids: Tensor,
+    reduced_attentions: Tensor,
+    block_size: int,
+    k: int,
+    generation_kwargs: dict[str, Any] = {},
+) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, LlamaAttention)
+    elif isinstance(model, Qwen2ForCausalLM):
+        for layer in model.model.layers:
+            assert isinstance(layer.self_attn, Qwen2Attention)
+    else:
+        raise NotImplementedError()
+
+    assert input_ids.shape[0] == 1
+    input_len = input_ids.shape[1]
+    position_ids = torch.arange(input_ids, device=input_ids.device)[None]  # type: ignore
+
+    k = min(k, input_len - block_size)
+
+    sink_indices = get_sink_indices(reduced_attentions, k=k, block_size=block_size)
+
+    past_key_values = TokenDroppingCache()
+
+    cache_seq_indices = torch.empty(
+        model.config.num_hidden_layers,
+        input_ids.shape[0],
+        model.config.num_key_value_heads,
+        0,
+        dtype=torch.int64,
+    )
+
+    for block_idx in range((input_len + block_size - 1) // block_size):
+        block_start = block_idx * block_size
+        block_end = min((block_idx + 1) * block_size, input_len)
+        block_input_ids = input_ids[:, block_start:block_end]
+        block_position_ids = position_ids[:, block_start:block_end]
+
+        with torch.no_grad():
+            _ = model(
+                input_ids=block_input_ids,
+                position_ids=block_position_ids,
+                use_cache=True,
+                past_key_values=past_key_values,
+            )
+
+        selected_indices, cache_seq_indices = update_indices(
+            sink_indices=sink_indices,
+            cache_seq_indices=cache_seq_indices,
+            block_idx=block_idx,
+            block_size=block_size,
+            k=k,
+            input_len=input_len,
+        )
+
+        for layer_idx in range(model.config.num_hidden_layers):
+            past_key_values.token_select_indices(
+                selected_indices[layer_idx],
+                layer_idx=layer_idx,
+            )
 
     cache_size = min(block_size + k, input_len - 1)
     assert past_key_values.get_seq_length() == cache_size
