@@ -94,13 +94,13 @@ def dynamic_attention_sinks_generate(
         raise NotImplementedError()
 
     assert input_ids.shape[0] == 1
-    input_len = input_ids.shape[1]
-    position_ids = torch.arange(input_ids, device=input_ids.device)[None]  # type: ignore
+    prefill_input_len = input_ids.shape[1] - 1
+    position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
 
-    k = min(k, input_len - block_size)
+    k = min(k, prefill_input_len - block_size)
 
     sink_indices = get_sink_indices(
-        reduced_attentions.sum(dim=[0, 2])[None, :, None],
+        reduced_attentions.sum(dim=[0, 2])[None, :, None, :-1],
         k=k,
         block_size=block_size,
     )[0, :, 0]
@@ -108,9 +108,9 @@ def dynamic_attention_sinks_generate(
     past_key_values = TokenDroppingCache()
     cache_seq_indices: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
 
-    for block_idx in range((input_len + block_size - 1) // block_size):
+    for block_idx in range((prefill_input_len + block_size - 1) // block_size):
         block_start = block_idx * block_size
-        block_end = min((block_idx + 1) * block_size, input_len)
+        block_end = min((block_idx + 1) * block_size, prefill_input_len)
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
 
@@ -139,8 +139,12 @@ def dynamic_attention_sinks_generate(
 
         cache_seq_indices = new_cache_seq_indices
 
-    cache_size = min(block_size + k, input_len - 1)
-    assert past_key_values.get_seq_length() == cache_size
+    cache_size = min(block_size + k, prefill_input_len)
+    assert past_key_values.get_seq_length() == cache_size, (
+        past_key_values.get_seq_length(),
+        prefill_input_len,
+        block_size + k,
+    )
 
     generated_ids: Tensor = model.generate(  # type: ignore
         input_ids=input_ids[:, -cache_size - 1 :],
@@ -172,7 +176,7 @@ def dynamic_attention_sinks_generate_v2(
 
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
-    position_ids = torch.arange(input_ids, device=input_ids.device)[None]  # type: ignore
+    position_ids = torch.arange(input_len, device=input_ids.device)[None]  # type: ignore
 
     k = min(k, input_len - block_size)
 
