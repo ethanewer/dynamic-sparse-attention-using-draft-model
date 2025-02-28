@@ -7,9 +7,11 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
-from .sink_indices_util import get_sink_indices
+from .sink_indices_util import get_sink_indices, update_indices
 
-from tqdm.notebook import trange
+from tqdm.notebook import trange  # type: ignore
+
+# import time
 
 
 def streaming_llm_experiment(
@@ -272,56 +274,17 @@ def dynamic_attention_sinks_v2_experiment(
 
     k = min(k, input_len - block_size)
 
-    # fully_reduced_attention = torch.cat(reduced_attentions, dim=1).sum(dim=1)
-    # sink_indices_control: list[list[list[int]]] = [
-    #     get_sink_indices_for_single_head(
-    #         fully_reduced_attention[batch_idx],
-    #         k=k,
-    #         block_size=block_size,
-    #         input_len=input_len,
-    #     )
-    #     for batch_idx in range(input_ids.shape[0])
-    # ]
-
-    # sink_indices: list[list[list[list[list[int]]]]] = []
-    # for layer_idx in range(model.config.num_hidden_layers):
-    #     sink_indices.append([])
-    #     for batch_idx in range(input_ids.shape[0]):
-    #         sink_indices[layer_idx].append([])
-    #         for head_idx in range(model.config.num_key_value_heads):
-    #             sink_indices[layer_idx][batch_idx].append(
-    #                 get_sink_indices_for_single_head(
-    #                     reduced_attentions[layer_idx][batch_idx, head_idx],
-    #                     k=k,
-    #                     block_size=block_size,
-    #                     input_len=input_len,
-    #                 )
-    #             )
-
-    print("    a")
-
     sink_indices = get_sink_indices(reduced_attentions, k=k, block_size=block_size)
-
-    # for layer_idx in range(model.config.num_hidden_layers):
-    #     for batch_idx in range(input_ids.shape[0]):
-    #         for head_idx in range(model.config.num_key_value_heads):
-    #             assert (
-    #                 sink_indices[layer_idx][batch_idx][head_idx]
-    #                 == sink_indices_control[batch_idx]
-    #             )
-
-    print("    b")
 
     past_key_values = TokenDroppingCache()
 
-    cache_seq_indices: list[list[list[list[int]]]] = make_4d_list(
+    cache_seq_indices = torch.empty(
         model.config.num_hidden_layers,
         input_ids.shape[0],
         model.config.num_key_value_heads,
+        0,
+        dtype=torch.int64,
     )
-
-    # past_key_values_control = TokenDroppingCache()
-    # cache_seq_indices_control: list[list[int]] = [[] for _ in range(input_ids.shape[0])]
 
     for block_idx in trange(
         (input_len + block_size - 1) // block_size, desc="block prefill v2"
@@ -330,6 +293,7 @@ def dynamic_attention_sinks_v2_experiment(
         block_end = min((block_idx + 1) * block_size, input_ids.shape[1])
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
+        # t0 = time.time()
 
         with torch.no_grad():
             _ = model(
@@ -339,87 +303,32 @@ def dynamic_attention_sinks_v2_experiment(
                 past_key_values=past_key_values,
             )
 
-        #     _ = model(
-        #         input_ids=block_input_ids,
-        #         position_ids=block_position_ids,
-        #         use_cache=True,
-        #         past_key_values=past_key_values_control,
-        #     )
+        # t1 = time.time()
 
-        # selected_indices_control: list[list[int]] = [
-        #     [] for _ in range(input_ids.shape[0])
-        # ]
-        # new_cache_seq_indices_control: list[list[int]] = [
-        #     [] for _ in range(input_ids.shape[0])
-        # ]
-        # for batch_idx in range(input_ids.shape[0]):
-        #     indices = sink_indices_control[batch_idx][block_idx]
-
-        #     cache_seq_indices_control[batch_idx] += list(range(block_start, block_end))
-        #     for cache_idx, seq_idx in enumerate(cache_seq_indices_control[batch_idx]):
-        #         if seq_idx in indices or seq_idx >= block_end - block_size:
-        #             selected_indices_control[batch_idx].append(cache_idx)
-        #             new_cache_seq_indices_control[batch_idx].append(seq_idx)
-
-        # past_key_values_control.token_select_indices(
-        #     torch.tensor(selected_indices_control, device=input_ids.device)
-        # )
-
-        # cache_seq_indices_control = new_cache_seq_indices_control
-
-        selected_indices = make_4d_list(
-            model.config.num_hidden_layers,
-            input_ids.shape[0],
-            model.config.num_key_value_heads,
+        selected_indices, cache_seq_indices = update_indices(
+            sink_indices=sink_indices,
+            cache_seq_indices=cache_seq_indices,
+            block_idx=block_idx,
+            block_size=block_size,
+            k=k,
+            input_len=input_len,
         )
-        new_cache_seq_indices = make_4d_list(
-            model.config.num_hidden_layers,
-            input_ids.shape[0],
-            model.config.num_key_value_heads,
-        )
-        for layer_idx in range(model.config.num_hidden_layers):
-            for batch_idx in range(input_ids.shape[0]):
-                for head_idx in range(model.config.num_key_value_heads):
-                    indices = sink_indices[layer_idx][batch_idx][head_idx][block_idx]
 
-                    cache_seq_indices[layer_idx][batch_idx][head_idx] += list(
-                        range(block_start, block_end)
-                    )
-                    for cache_idx, seq_idx in enumerate(
-                        cache_seq_indices[layer_idx][batch_idx][head_idx]
-                    ):
-                        if seq_idx in indices or seq_idx >= block_end - block_size:
-                            selected_indices[layer_idx][batch_idx][head_idx].append(
-                                cache_idx
-                            )
-                            new_cache_seq_indices[layer_idx][batch_idx][
-                                head_idx
-                            ].append(seq_idx)
+        selected_indices = selected_indices.to(input_ids.device)
 
-        print("        c")
-        # for layer_idx in range(model.config.num_hidden_layers):
-        #     for batch_idx in range(input_ids.shape[0]):
-        #         for head_idx in range(model.config.num_key_value_heads):
-        #             assert (
-        #                 selected_indices[layer_idx][batch_idx][head_idx]
-        #                 == selected_indices_control[batch_idx]
-        #             )
+        # t2 = time.time()
+        # print(block_size, k, block_idx, len(selected_indices[0][0][0]))
 
         for layer_idx in range(model.config.num_hidden_layers):
             past_key_values.token_select_indices(
-                torch.tensor(selected_indices[layer_idx], device=input_ids.device),
+                selected_indices[layer_idx],
                 layer_idx=layer_idx,
             )
 
-        cache_seq_indices = new_cache_seq_indices
-        # for layer_idx in range(model.config.num_hidden_layers):
-        #     for batch_idx in range(input_ids.shape[0]):
-        #         for head_idx in range(model.config.num_key_value_heads):
-        #             assert (
-        #                 cache_seq_indices[layer_idx][batch_idx][head_idx]
-        #                 == cache_seq_indices_control[batch_idx]
-        #             )
-        print("        d")
+        # t3 = time.time()
+        # print(
+        #     f"model forward: {t1 - t0:.3f}s, update indices: {t2 - t1:.3f}s, trim cache: {t3 - t2:.3f}s,"
+        # )
 
     assert past_key_values.get_seq_length() == block_size + k
 
