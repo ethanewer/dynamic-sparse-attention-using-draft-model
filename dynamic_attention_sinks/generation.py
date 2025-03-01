@@ -161,10 +161,10 @@ def dynamic_attention_sinks_generate_v2(
         raise NotImplementedError()
 
     assert input_ids.shape[0] == 1
-    input_len = input_ids.shape[1]
-    position_ids = torch.arange(input_len, device=input_ids.device)[None]  # type: ignore
+    prefill_input_len = input_ids.shape[1] - 1
+    position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
 
-    k = min(k, input_len - block_size)
+    k = min(k, prefill_input_len - block_size)
 
     cache_update_indices = get_cache_update_indices(
         reduced_attentions[..., :-1],
@@ -176,9 +176,9 @@ def dynamic_attention_sinks_generate_v2(
 
     past_key_values = TokenDroppingCache()
 
-    for block_idx in range((input_len + block_size - 1) // block_size):
+    for block_idx in range((prefill_input_len + block_size - 1) // block_size):
         block_start = block_idx * block_size
-        block_end = min((block_idx + 1) * block_size, input_len)
+        block_end = min((block_idx + 1) * block_size, prefill_input_len)
         block_input_ids = input_ids[:, block_start:block_end]
         block_position_ids = position_ids[:, block_start:block_end]
 
@@ -196,7 +196,7 @@ def dynamic_attention_sinks_generate_v2(
                 layer_idx=layer_idx,
             )
 
-    cache_size = min(block_size + k, input_len - 1)
+    cache_size = min(block_size + k, prefill_input_len)
     assert past_key_values.get_seq_length() == cache_size
 
     generated_ids: Tensor = model.generate(  # type: ignore
