@@ -11,7 +11,7 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 from .token_dropping_cache import TokenDroppingCache
-from .sink_indices_util import get_cache_update_indices
+from .indices_util import get_cache_update_indices
 
 
 def generate_reduced_attentions(

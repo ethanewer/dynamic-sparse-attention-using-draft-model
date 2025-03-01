@@ -3,8 +3,6 @@ from torch import Tensor
 import numpy as np
 from numba import njit  # type: ignore
 
-import time
-
 
 @njit
 def get_sink_indices_np(
@@ -144,9 +142,6 @@ def update_indices_np(
         block_end,
     )
 
-    # assert (selected_indices >= 0).all()
-    # assert (new_cache_seq_indices >= 0).all()
-
     return selected_indices, new_cache_seq_indices
 
 
@@ -179,7 +174,6 @@ def get_cache_update_indices(
     num_hidden_layers, batch_size, num_key_value_heads, input_len = (
         reduced_attentions.shape
     )
-    t0 = time.time()
 
     sorted_indices = reduced_attentions.argsort(dim=-1, descending=True).numpy()
     sink_indices = get_sink_indices_np(
@@ -197,13 +191,9 @@ def get_cache_update_indices(
         dtype=np.int64,
     )
 
-    # print(f"get sink indices: {time.time() - t0:.3f}s")
-
     cache_update_indices = []
 
     for block_idx in range((input_len + block_size - 1) // block_size):
-        t0 = time.time()
-
         block_selected_indices, cache_seq_indices = update_indices_np(
             sink_indices=sink_indices,
             cache_seq_indices=cache_seq_indices,
@@ -213,9 +203,6 @@ def get_cache_update_indices(
             input_len=input_len,
         )
 
-        # print(f"update indices: {time.time() - t0:.3f}s")
-        t0 = time.time()
-
         if reduce_heads:
             assert (
                 block_selected_indices.shape[0] == 1
@@ -224,7 +211,5 @@ def get_cache_update_indices(
             block_selected_indices = block_selected_indices[0, :, 0]
 
         cache_update_indices.append(torch.from_numpy(block_selected_indices).to(device))
-
-        # print(f"move to device: {time.time() - t0:.3f}s")
 
     return cache_update_indices
