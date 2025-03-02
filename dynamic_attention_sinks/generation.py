@@ -170,14 +170,14 @@ def dynamic_attention_sinks_generate(
                 past_key_values=past_key_values,
             )
 
-        if isinstance(cache_update_indices, list):
+        if pyramid:
             for layer_idx in range(model.config.num_hidden_layers):
                 past_key_values.token_select_indices(
                     cache_update_indices[layer_idx][block_idx],
                     layer_idx=layer_idx,
                 )
         else:
-            past_key_values.token_select_indices(cache_update_indices[block_idx])
+            past_key_values.token_select_indices(cache_update_indices[block_idx])  # type: ignore
 
     cache_size = sum(
         past_key_values.get_seq_length(layer_idx)
