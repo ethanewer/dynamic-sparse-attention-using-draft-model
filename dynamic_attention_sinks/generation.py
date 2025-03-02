@@ -179,7 +179,15 @@ def dynamic_attention_sinks_generate(
         else:
             past_key_values.token_select_indices(cache_update_indices[block_idx])
 
-    cache_size = min(block_size + k, prefill_input_len)
+    cache_size = sum(
+        past_key_values.get_seq_length(layer_idx)
+        for layer_idx in range(model.config.num_hidden_layers)
+    )
+    max_cache_size = (
+        min(block_size + k, prefill_input_len) * model.config.num_hidden_layers
+    )
+    assert cache_size <= max_cache_size
+
     assert past_key_values.get_seq_length() == cache_size, (
         past_key_values.get_seq_length(),
         prefill_input_len,
