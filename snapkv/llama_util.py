@@ -101,3 +101,14 @@ def update_llama_model_for_snapkv(model):
         )
 
     return model
+
+
+def reset_llama_model(model):
+    for i in range(len(model.model.layers)):
+        attn_layer = model.model.layers[i].self_attn
+        attn_layer.forward = LlamaAttention.forward.__get__(
+            attn_layer,
+            type(attn_layer),
+        )
+
+    return model

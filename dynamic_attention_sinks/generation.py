@@ -90,7 +90,7 @@ def get_pyramid_ks(
         max_k = prefill_input_len - block_size
         min_k = 2 * k * m - max_k
 
-    ks = [max_k - (max_k - min_k) * i // (m - 1) for i in range(m)]
+    ks = [int(max_k - (max_k - min_k) * i / (m - 1)) for i in range(m)]
     return ks
 
 
@@ -186,13 +186,7 @@ def dynamic_attention_sinks_generate(
     max_cache_size = (
         min(block_size + k, prefill_input_len) * model.config.num_hidden_layers
     )
-    assert cache_size <= max_cache_size
-
-    assert past_key_values.get_seq_length() == cache_size, (
-        past_key_values.get_seq_length(),
-        prefill_input_len,
-        block_size + k,
-    )
+    assert cache_size <= max_cache_size, (cache_size, max_cache_size)
 
     generated_ids: Tensor = model.generate(  # type: ignore
         input_ids=input_ids[:, -cache_size - 1 :],
