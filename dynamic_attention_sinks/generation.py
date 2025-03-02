@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -76,12 +76,33 @@ def generate_reduced_attentions(
     return sequences, torch.stack(reduced_attentions)
 
 
+def get_pyramid_ks(
+    k: int,
+    m: int,
+    beta: int,
+    prefill_input_len: int,
+    block_size: int,
+) -> list[int]:
+    min_k = k // beta
+    max_k = 2 * k - min_k
+
+    if max_k >= prefill_input_len - block_size:
+        max_k = prefill_input_len - block_size
+        min_k = 2 * k * m - max_k
+
+    ks = [max_k - (max_k - min_k) * i // (m - 1) for i in range(m)]
+    return ks
+
+
 def dynamic_attention_sinks_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     reduced_attentions: Tensor,
     block_size: int,
     k: int,
+    layer_aggregation: Literal["mean", "last"] = "mean",
+    pyramid: bool = False,
+    beta: int = 8,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
@@ -99,13 +120,39 @@ def dynamic_attention_sinks_generate(
 
     k = min(k, prefill_input_len - block_size)
 
-    cache_update_indices = get_cache_update_indices(
-        reduced_attentions.sum(dim=[0, 2])[None, :, None, :-1],
-        k=k,
-        block_size=block_size,
-        reduce_heads=True,
-        device=input_ids.device,  # type: ignore
-    )
+    if layer_aggregation == "mean":
+        aggregate_attentions = reduced_attentions.mean(dim=(0, 2))
+    elif layer_aggregation == "last":
+        aggregate_attentions = reduced_attentions[-1].mean(dim=1)
+    else:
+        raise NotImplementedError
+
+    if pyramid:
+        layer_ks = get_pyramid_ks(
+            k=k,
+            m=model.config.num_hidden_layers,
+            beta=beta,
+            prefill_input_len=prefill_input_len,
+            block_size=block_size,
+        )
+        cache_update_indices = [
+            get_cache_update_indices(
+                reduced_attentions=aggregate_attentions[None, :, None, :-1],
+                k=layer_k,
+                block_size=block_size,
+                reduce_heads=True,
+                device=input_ids.device,  # type: ignore
+            )
+            for layer_k in layer_ks
+        ]
+    else:
+        cache_update_indices = get_cache_update_indices(
+            reduced_attentions=aggregate_attentions[None, :, None, :-1],
+            k=k,
+            block_size=block_size,
+            reduce_heads=True,
+            device=input_ids.device,  # type: ignore
+        )
 
     past_key_values = TokenDroppingCache()
 
@@ -123,7 +170,14 @@ def dynamic_attention_sinks_generate(
                 past_key_values=past_key_values,
             )
 
-        past_key_values.token_select_indices(cache_update_indices[block_idx])
+        if isinstance(cache_update_indices, list):
+            for layer_idx in range(model.config.num_hidden_layers):
+                past_key_values.token_select_indices(
+                    cache_update_indices[layer_idx][block_idx],
+                    layer_idx=layer_idx,
+                )
+        else:
+            past_key_values.token_select_indices(cache_update_indices[block_idx])
 
     cache_size = min(block_size + k, prefill_input_len)
     assert past_key_values.get_seq_length() == cache_size, (
