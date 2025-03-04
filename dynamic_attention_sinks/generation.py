@@ -10,8 +10,8 @@ from transformers import (  # type: ignore
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
-from .token_dropping_cache import TokenDroppingCache
 from .indices_util import get_cache_update_indices
+from .token_dropping_cache import TokenDroppingCache
 
 
 def generate_reduced_attentions(
@@ -179,15 +179,18 @@ def dynamic_attention_sinks_generate(
         else:
             past_key_values.token_select_indices(cache_update_indices[block_idx])  # type: ignore
 
-    cache_size = sum(
+    cache_size = past_key_values.get_seq_length()
+    full_cache_size = sum(
         past_key_values.get_seq_length(layer_idx)
         for layer_idx in range(model.config.num_hidden_layers)
     )
-    max_cache_size = (
+    max_full_cache_size = (
         min(block_size + k, prefill_input_len) * model.config.num_hidden_layers
     )
-    assert cache_size <= max_cache_size, (cache_size, max_cache_size)
-
+    assert full_cache_size <= max_full_cache_size, (
+        full_cache_size,
+        max_full_cache_size,
+    )
     generated_ids: Tensor = model.generate(  # type: ignore
         input_ids=input_ids[:, -cache_size - 1 :],
         attention_mask=torch.ones_like(input_ids),
@@ -252,8 +255,8 @@ def dynamic_attention_sinks_generate_v2(
                 layer_idx=layer_idx,
             )
 
-    cache_size = min(block_size + k, prefill_input_len)
-    assert past_key_values.get_seq_length() == cache_size
+    cache_size = past_key_values.get_seq_length()
+    assert cache_size == min(block_size + k, prefill_input_len)
 
     generated_ids: Tensor = model.generate(  # type: ignore
         input_ids=input_ids[:, -cache_size - 1 :],

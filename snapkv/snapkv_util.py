@@ -13,12 +13,14 @@ class SnapKVCluster:
         max_capacity_prompt=2048,
         kernel_size=5,
         pooling="avgpool",
+        log_indices=False,
     ) -> None:
         self.window_size = window_size
         self.max_capacity_prompt = max_capacity_prompt
         assert self.max_capacity_prompt > self.window_size
         self.kernel_size = kernel_size
         self.pooling = pooling
+        self.log_indices = log_indices
 
     @staticmethod
     def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
@@ -103,6 +105,16 @@ class SnapKVCluster:
                 self.max_capacity_prompt - self.window_size,
                 dim=-1,
             ).indices
+
+            if self.log_indices:
+                window_indices = torch.arange(seq_len - self.window_size, seq_len)[
+                    None, None
+                ].expand(indices.shape[0], indices.shape[1], -1)
+                self.most_recent_indices = torch.cat(
+                    (indices.cpu(), window_indices),
+                    dim=2,
+                )
+
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
             key_past_compress = key_states[:, :, : -self.window_size, :].gather(
                 dim=2,
@@ -130,10 +142,13 @@ def init_snapkv(self):
             self.config.kernel_size = 5
         if not hasattr(self.config, "pooling"):
             self.config.pooling = "avgpool"
+        if not hasattr(self.config, "log_indices"):
+            self.config.log_indices = False
 
     self.kv_cluster = SnapKVCluster(
         window_size=self.config.window_size,
         max_capacity_prompt=self.config.max_capacity_prompt,
         kernel_size=self.config.kernel_size,
         pooling=self.config.pooling,
+        log_indices=self.config.log_indices,
     )
