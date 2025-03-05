@@ -17,6 +17,7 @@ from .token_dropping_cache import TokenDroppingCache
 def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
+    reduction: Literal["mean", "squared_sum", "max"] = "squared_sum",
     generation_kwargs: dict[str, Any] = {},
 ) -> tuple[Tensor, Tensor]:
     if isinstance(model, LlamaForCausalLM):
@@ -54,12 +55,28 @@ def generate_reduced_attentions(
         for y in x:
             assert y.shape[2] == 1, y.shape
 
-    reduced_attentions: list[Tensor] = [
-        torch.cat([a[i][..., :input_len] for a in outputs.attentions], dim=2)  # type: ignore
-        .square()
-        .sum(dim=2)
-        for i in range(model.config.num_hidden_layers)
-    ]
+    attentions: tuple[tuple[Tensor, ...], ...] = outputs.attentions  # type: ignore
+    if reduction == "mean":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2).mean(dim=2)
+            for i in range(model.config.num_hidden_layers)
+        ]
+    elif reduction == "squared_sum":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
+            .square()
+            .sum(dim=2)
+            for i in range(model.config.num_hidden_layers)
+        ]
+    elif reduction == "max":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
+            .max(dim=2)
+            .values
+            for i in range(model.config.num_hidden_layers)
+        ]
+    else:
+        raise NotImplementedError
 
     num_queries = model.config.num_attention_heads // model.config.num_key_value_heads
     if num_queries > 1:
