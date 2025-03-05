@@ -14,12 +14,57 @@ from .indices_util import get_cache_update_indices
 from .token_dropping_cache import TokenDroppingCache
 
 
+def reduce_attentions(
+    attentions: tuple[tuple[Tensor, ...], ...],
+    reduction: Literal["mean", "squared_sum", "max"],
+    batch_size: int,
+    input_len: int,
+    config: Any,
+) -> Tensor:
+    if reduction == "mean":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2).mean(dim=2)
+            for i in range(config.num_hidden_layers)
+        ]
+    elif reduction == "squared_sum":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
+            .square()
+            .sum(dim=2)
+            for i in range(config.num_hidden_layers)
+        ]
+    elif reduction == "max":
+        reduced_attentions = [
+            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
+            .max(dim=2)
+            .values
+            for i in range(config.num_hidden_layers)
+        ]
+    else:
+        raise NotImplementedError
+
+    num_queries = config.num_attention_heads // config.num_key_value_heads
+    if num_queries > 1:
+        reduced_attentions = [
+            a.view(
+                batch_size,
+                config.num_key_value_heads,
+                num_queries,
+                input_len,
+            ).mean(dim=2)
+            for a in reduced_attentions
+        ]
+
+    return torch.stack(reduced_attentions)
+
+
 def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
-    reduction: Literal["mean", "squared_sum", "max"] = "squared_sum",
+    reduction: Literal["mean", "squared_sum", "max"]
+    | tuple[Literal["mean", "squared_sum", "max"]] = "squared_sum",
     generation_kwargs: dict[str, Any] = {},
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, tuple[Tensor, ...] | Tensor]:
     if isinstance(model, LlamaForCausalLM):
         for layer in model.model.layers:
             assert isinstance(layer.self_attn, LlamaAttention)
@@ -29,7 +74,6 @@ def generate_reduced_attentions(
     else:
         raise NotImplementedError()
 
-    input_len = input_ids.shape[1]
     past_key_values = DynamicCache()
 
     with torch.no_grad():
@@ -56,41 +100,28 @@ def generate_reduced_attentions(
             assert y.shape[2] == 1, y.shape
 
     attentions: tuple[tuple[Tensor, ...], ...] = outputs.attentions  # type: ignore
-    if reduction == "mean":
-        reduced_attentions = [
-            torch.cat([a[i][..., :input_len] for a in attentions], dim=2).mean(dim=2)
-            for i in range(model.config.num_hidden_layers)
-        ]
-    elif reduction == "squared_sum":
-        reduced_attentions = [
-            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
-            .square()
-            .sum(dim=2)
-            for i in range(model.config.num_hidden_layers)
-        ]
-    elif reduction == "max":
-        reduced_attentions = [
-            torch.cat([a[i][..., :input_len] for a in attentions], dim=2)
-            .max(dim=2)
-            .values
-            for i in range(model.config.num_hidden_layers)
-        ]
+
+    if isinstance(reduction, tuple):
+        reduced_attentions: tuple[Tensor, ...] | Tensor = tuple(
+            reduce_attentions(
+                attentions=attentions,
+                reduction=r,
+                batch_size=input_ids.shape[0],
+                input_len=input_ids.shape[1],
+                config=model.config,
+            )
+            for r in reduction
+        )
     else:
-        raise NotImplementedError
+        reduced_attentions = reduce_attentions(
+            attentions=attentions,
+            reduction=reduction,
+            batch_size=input_ids.shape[0],
+            input_len=input_ids.shape[1],
+            config=model.config,
+        )
 
-    num_queries = model.config.num_attention_heads // model.config.num_key_value_heads
-    if num_queries > 1:
-        reduced_attentions = [
-            a.view(
-                input_ids.shape[0],
-                model.config.num_key_value_heads,
-                num_queries,
-                input_len,
-            ).mean(dim=2)
-            for a in reduced_attentions
-        ]
-
-    return sequences, torch.stack(reduced_attentions)
+    return sequences, reduced_attentions
 
 
 def get_pyramid_ks(
