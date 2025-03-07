@@ -23,15 +23,11 @@ class MSEAttentionMapping(AttentionMapping):
         num_full_layers = full_reduced_attentions[0].shape[0]
         num_full_heads = full_reduced_attentions[0].shape[2]
 
-        self.w_shape = (
+        self.w = torch.zeros(
             num_draft_heads,
             num_draft_layers,
             num_full_heads,
             num_full_layers,
-        )
-        self.w = torch.zeros(
-            num_draft_heads * num_draft_layers,
-            num_full_heads * num_full_layers,
             requires_grad=True,
             device=device,
         )
