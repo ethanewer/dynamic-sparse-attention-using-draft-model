@@ -31,7 +31,7 @@ def repeat_block(block: Tensor, num_repeat: int) -> Tensor:
 
 def stack_block_along_batch(block: Tensor) -> Tensor:
     batch_size, num_key_value_heads, num_blocks, block_size, head_dim = block.shape
-    return block.transpose(1, 2).view(
+    return block.transpose(1, 2).reshape(
         batch_size * num_blocks,
         num_key_value_heads,
         block_size,
@@ -62,6 +62,8 @@ def dynamic_attention_sinks_attention_forward(
     dropout: float = 0.0,
     scaling: Optional[float] = None,
 ) -> tuple[Tensor, None]:
+    # print(f"{query.numel()=}, {key.numel()=}, {value.numel()=}")
+
     assert query.shape[-2] == key.shape[-2] and key.shape[-2] == value.shape[-2], (
         query.shape,
         key.shape,
@@ -70,18 +72,22 @@ def dynamic_attention_sinks_attention_forward(
 
     causal_mask = attention_mask
     if causal_mask is not None:
-        causal_mask = causal_mask[:, :, :, : key.shape[-2]]
+        causal_mask = causal_mask[:, :, :, : key.shape[-2]].expand(
+            query.shape[0],
+            -1,
+            -1,
+            -1,
+        )
     else:
-        causal_mask = torch.ones(
-            query.shape[-2],
-            key.shape[-2],
+        causal_mask = torch.full(
+            (query.shape[0], 1, query.shape[-2], key.shape[-2]),
+            fill_value=torch.finfo(query.dtype).min,
             dtype=query.dtype,
             device=query.device,
-        ).tril_()
-        causal_mask = torch.finfo(query.dtype).min * (1 - causal_mask[None, None])
+        ).triu_(1)
 
     assert causal_mask is not None
-    causal_mask = causal_mask.expand(query.shape[0], query.shape[1], -1, -1)
+    causal_mask = causal_mask
 
     origional_seq_len = query.shape[-2]
 
@@ -107,10 +113,14 @@ def dynamic_attention_sinks_attention_forward(
     )
 
     mask_expanded_indices = (
-        indices[:, :, :, None, :].expand(-1, -1, -1, block_size, -1).relu()
+        indices[: causal_mask.shape[0], : causal_mask.shape[1], :, None, :]
+        .expand(-1, -1, -1, block_size, -1)
+        .relu()
     )
 
-    invalid_expanded_indices = (indices == -1)[:, :, :, None, :].expand(
+    invalid_expanded_indices = (indices == -1)[
+        : causal_mask.shape[0], : causal_mask.shape[1], :, None, :
+    ].expand(
         -1,
         -1,
         -1,
@@ -137,7 +147,6 @@ def dynamic_attention_sinks_attention_forward(
         .expand(-1, -1, value.shape[2] // block_size, -1, -1)
         .gather(dim=3, index=kv_expanded_indices)
     )
-
     block_mask = causal_mask.view(
         causal_mask.shape[0],
         causal_mask.shape[1],
@@ -152,18 +161,21 @@ def dynamic_attention_sinks_attention_forward(
         block_mask,
     )
 
+    # print(f"{block_query.numel()=}, {block_key.numel()=}, {block_value.numel()=}")
+
     if hasattr(module, "num_key_value_groups"):
         block_key = repeat_block(block_key, module.num_key_value_groups)
         block_value = repeat_block(block_value, module.num_key_value_groups)
-        block_mask = repeat_block(block_mask, module.num_key_value_groups)
 
     block_query = stack_block_along_batch(block_query)
     block_key = stack_block_along_batch(block_key)
     block_value = stack_block_along_batch(block_value)
     block_mask = stack_block_along_batch(block_mask)
 
+    # print(f"{block_query.numel()=}, {block_key.numel()=}, {block_value.numel()=}\n")
+
     attn_output = F.scaled_dot_product_attention(
-        (block_query),
+        block_query,
         block_key,
         block_value,
         attn_mask=block_mask,

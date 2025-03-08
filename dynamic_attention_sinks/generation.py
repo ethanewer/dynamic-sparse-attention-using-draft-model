@@ -131,7 +131,6 @@ def dynamic_attention_sinks_generate(
     beta: int = 8,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
-    assert input_ids.shape[0] == 1
     prefill_input_len = input_ids.shape[1] - 1
     position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
 
@@ -227,7 +226,6 @@ def dynamic_attention_sinks_generate_v2(
     k: int,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
-    assert input_ids.shape[0] == 1
     prefill_input_len = input_ids.shape[1] - 1
     position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
 
@@ -292,7 +290,6 @@ def dynamic_attention_sinks_generate_v3(
     else:
         raise NotImplementedError()
 
-    assert input_ids.shape[0] == 1
     prefill_input_len = input_ids.shape[1] - 1
 
     k = min(k, prefill_input_len - block_size)
