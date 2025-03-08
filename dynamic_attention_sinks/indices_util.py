@@ -14,7 +14,7 @@ def get_indices_np(
     num_hidden_layers: int,
     num_key_value_heads: int,
 ) -> np.ndarray:
-    indices = -np.ones(
+    indices = np.full(
         (
             num_hidden_layers,
             batch_size,
@@ -22,6 +22,7 @@ def get_indices_np(
             (input_len + block_size - 1) // block_size + 1,
             2 * block_size + k,
         ),
+        fill_value=input_len,
         dtype=np.int64,
     )
 
