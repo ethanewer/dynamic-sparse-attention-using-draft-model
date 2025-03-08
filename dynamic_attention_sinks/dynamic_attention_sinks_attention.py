@@ -7,13 +7,48 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 
-def repeat_block(block: Tensor, n_rep: int) -> Tensor:
-    b, num_key_value_heads, m, n, d = block.shape
-    if n_rep == 1:
+def repeat_block(block: Tensor, num_repeat: int) -> Tensor:
+    batch_size, num_key_value_heads, num_blocks, block_dim, head_dim = block.shape
+    if num_repeat == 1:
         return block
 
-    block = block[:, :, None, :, :].expand(b, num_key_value_heads, n_rep, m, n, d)
-    return block.reshape(b, num_key_value_heads * n_rep, m, n, d)
+    block = block[:, :, None, :, :].expand(
+        batch_size,
+        num_key_value_heads,
+        num_repeat,
+        num_blocks,
+        block_dim,
+        head_dim,
+    )
+    return block.reshape(
+        batch_size,
+        num_key_value_heads * num_repeat,
+        num_blocks,
+        block_dim,
+        head_dim,
+    )
+
+
+def stack_block_along_batch(block: Tensor) -> Tensor:
+    batch_size, num_key_value_heads, num_blocks, block_size, head_dim = block.shape
+    return block.transpose(1, 2).view(
+        batch_size * num_blocks,
+        num_key_value_heads,
+        block_size,
+        head_dim,
+    )
+
+
+def unstack_block_along_batch(block: Tensor, batch_size: int) -> Tensor:
+    total_batch_size, num_key_value_heads, block_size, head_dim = block.shape
+    num_blocks = total_batch_size // batch_size
+    return block.view(
+        batch_size,
+        num_blocks,
+        num_key_value_heads,
+        block_size,
+        head_dim,
+    ).transpose(1, 2)
 
 
 def dynamic_attention_sinks_attention_forward(
@@ -40,15 +75,13 @@ def dynamic_attention_sinks_attention_forward(
         causal_mask = torch.ones(
             query.shape[-2],
             key.shape[-2],
+            dtype=query.dtype,
             device=query.device,
         ).tril_()
-        causal_mask = -3.4028e38 * (1 - causal_mask[None, None])
+        causal_mask = torch.finfo(query.dtype).min * (1 - causal_mask[None, None])
 
     assert causal_mask is not None
     causal_mask = causal_mask.expand(query.shape[0], query.shape[1], -1, -1)
-
-    # SDPA with memory-efficient backend is bugged with non-contiguous inputs and custom attn_mask for some torch versions
-    # Reference: https://github.com/pytorch/pytorch/issues/112577.
 
     origional_seq_len = query.shape[-2]
 
@@ -57,17 +90,17 @@ def dynamic_attention_sinks_attention_forward(
         query = F.pad(query, (0, 0, 0, pad))
         key = F.pad(key, (0, 0, 0, pad))
         value = F.pad(value, (0, 0, 0, pad))
-        causal_mask = F.pad(causal_mask, (0, pad, 0, pad), value=-3.4028e38)
+        causal_mask = F.pad(
+            causal_mask,
+            (0, pad, 0, pad),
+            value=torch.finfo(query.dtype).min,
+        )
 
     assert query.shape[-2] % block_size == 0, query.shape
     assert key.shape[-2] % block_size == 0, key.shape
     assert value.shape[-2] % block_size == 0, value.shape
     assert causal_mask.shape[-2] % block_size == 0, causal_mask.shape
     assert causal_mask.shape[-1] % block_size == 0, causal_mask.shape
-
-    query = query.contiguous()
-    key = key.contiguous()
-    value = value.contiguous()
 
     kv_expanded_indices = (
         indices[:, :, :, :, None].expand(-1, -1, -1, -1, key.shape[-1]).relu()
@@ -113,15 +146,24 @@ def dynamic_attention_sinks_attention_forward(
         -1,
     ).gather(dim=4, index=mask_expanded_indices)
 
-    block_mask = torch.where(invalid_expanded_indices, -3.4028e38, block_mask)
+    block_mask = torch.where(
+        invalid_expanded_indices,
+        torch.finfo(query.dtype).min,
+        block_mask,
+    )
 
     if hasattr(module, "num_key_value_groups"):
         block_key = repeat_block(block_key, module.num_key_value_groups)
         block_value = repeat_block(block_value, module.num_key_value_groups)
         block_mask = repeat_block(block_mask, module.num_key_value_groups)
 
+    block_query = stack_block_along_batch(block_query)
+    block_key = stack_block_along_batch(block_key)
+    block_value = stack_block_along_batch(block_value)
+    block_mask = stack_block_along_batch(block_mask)
+
     attn_output = F.scaled_dot_product_attention(
-        block_query,
+        (block_query),
         block_key,
         block_value,
         attn_mask=block_mask,
@@ -129,14 +171,15 @@ def dynamic_attention_sinks_attention_forward(
         scale=scaling,
     )
 
-    attn_output = attn_output[..., :origional_seq_len, :]
+    attn_output = unstack_block_along_batch(attn_output, batch_size=query.shape[0])
 
-    attn_output = attn_output.view(
+    attn_output = attn_output.reshape(
         attn_output.shape[0],
         attn_output.shape[1],
         attn_output.shape[2] * attn_output.shape[3],
         attn_output.shape[4],
     )
+    attn_output = attn_output[..., :origional_seq_len, :]
 
     attn_output = attn_output.transpose(1, 2).contiguous()
 

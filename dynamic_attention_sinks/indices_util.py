@@ -26,7 +26,10 @@ def get_indices_np(
     )
 
     for block_idx in range((input_len + block_size - 1) // block_size + 1):
-        kv_block_start = max(0, (block_idx - 1) * block_size)
+        kv_block_start = min(
+            max(0, (block_idx - 1) * block_size),
+            input_len - block_size,
+        )
         kv_block_end = min(input_len, (block_idx + 1) * block_size)
         kv_block_size = kv_block_end - kv_block_start
 

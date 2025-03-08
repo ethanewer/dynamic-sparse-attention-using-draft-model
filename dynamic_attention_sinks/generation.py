@@ -61,10 +61,9 @@ def reduce_attentions(
 def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
-    reduction: Literal["mean", "squared_sum", "max"]
-    | tuple[Literal["mean", "squared_sum", "max"]] = "squared_sum",
+    reduction: Literal["mean", "squared_sum", "max"],
     generation_kwargs: dict[str, Any] = {},
-) -> tuple[Tensor, tuple[Tensor, ...] | Tensor]:
+) -> tuple[Tensor, Tensor]:
     past_key_values = DynamicCache()
 
     with torch.no_grad():
@@ -92,25 +91,13 @@ def generate_reduced_attentions(
 
     attentions: tuple[tuple[Tensor, ...], ...] = outputs.attentions  # type: ignore
 
-    if isinstance(reduction, tuple):
-        reduced_attentions: tuple[Tensor, ...] | Tensor = tuple(
-            reduce_attentions(
-                attentions=attentions,
-                reduction=r,
-                batch_size=input_ids.shape[0],
-                input_len=input_ids.shape[1],
-                config=model.config,
-            )
-            for r in reduction
-        )
-    else:
-        reduced_attentions = reduce_attentions(
-            attentions=attentions,
-            reduction=reduction,
-            batch_size=input_ids.shape[0],
-            input_len=input_ids.shape[1],
-            config=model.config,
-        )
+    reduced_attentions = reduce_attentions(
+        attentions=attentions,
+        reduction=reduction,
+        batch_size=input_ids.shape[0],
+        input_len=input_ids.shape[1],
+        config=model.config,
+    )
 
     return sequences, reduced_attentions
 
@@ -320,7 +307,7 @@ def dynamic_attention_sinks_generate_v3(
 
     with torch.no_grad():
         _ = model(
-            input_ids=input_ids,
+            input_ids=input_ids[:, :-1],
             use_cache=True,
             past_key_values=past_key_values,
             dynamic_attention_sinks_block_size=block_size,
