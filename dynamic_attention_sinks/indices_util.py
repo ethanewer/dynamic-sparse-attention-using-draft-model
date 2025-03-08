@@ -1,7 +1,82 @@
-import torch
-from torch import Tensor
 import numpy as np
+import torch
 from numba import njit  # type: ignore
+from torch import Tensor
+
+
+@njit
+def get_indices_np(
+    sorted_indices: np.ndarray,
+    k: int,
+    block_size: int,
+    batch_size: int,
+    input_len: int,
+    num_hidden_layers: int,
+    num_key_value_heads: int,
+) -> np.ndarray:
+    indices = -np.ones(
+        (
+            num_hidden_layers,
+            batch_size,
+            num_key_value_heads,
+            (input_len + block_size - 1) // block_size + 1,
+            2 * block_size + k,
+        ),
+        dtype=np.int64,
+    )
+
+    for block_idx in range((input_len + block_size - 1) // block_size + 1):
+        kv_block_start = max(0, (block_idx - 1) * block_size)
+        kv_block_end = min(input_len, (block_idx + 1) * block_size)
+        kv_block_size = kv_block_end - kv_block_start
+
+        indices[..., block_idx, k : k + kv_block_size] = np.arange(
+            kv_block_start,
+            kv_block_end,
+        )
+
+        if block_idx > 1:
+            block_start = min(block_idx * block_size, input_len)
+            for layer_idx in range(num_hidden_layers):
+                for batch_idx in range(batch_size):
+                    for head_idx in range(num_key_value_heads):
+                        i = 0
+                        for j in sorted_indices[layer_idx, batch_idx, head_idx]:
+                            if j < block_start - block_size:
+                                indices[
+                                    layer_idx,
+                                    batch_idx,
+                                    head_idx,
+                                    block_idx,
+                                    i,
+                                ] = j
+                                i += 1
+                                if i == k:
+                                    break
+
+    return indices
+
+
+def get_indices(
+    reduced_attentions: Tensor,
+    k: int,
+    block_size: int,
+) -> Tensor:
+    num_hidden_layers, batch_size, num_key_value_heads, input_len = (
+        reduced_attentions.shape
+    )
+
+    sorted_indices = reduced_attentions.argsort(dim=-1, descending=True).numpy()
+    indices = get_indices_np(
+        sorted_indices=sorted_indices,
+        k=k,
+        block_size=block_size,
+        batch_size=batch_size,
+        input_len=input_len,
+        num_hidden_layers=num_hidden_layers,
+        num_key_value_heads=num_key_value_heads,
+    )
+    return torch.from_numpy(indices)
 
 
 @njit

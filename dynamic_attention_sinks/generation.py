@@ -7,10 +7,10 @@ from transformers import (  # type: ignore
     LlamaForCausalLM,
     Qwen2ForCausalLM,
 )
-from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
-from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
-from .indices_util import get_cache_update_indices
+from .indices_util import get_cache_update_indices, get_indices
+from .llama_util import update_llama_model_for_dynamic_attention_sinks
+from .qwen2_util import update_qwen2_model_for_dynamic_attention_sinks
 from .token_dropping_cache import TokenDroppingCache
 
 
@@ -65,15 +65,6 @@ def generate_reduced_attentions(
     | tuple[Literal["mean", "squared_sum", "max"]] = "squared_sum",
     generation_kwargs: dict[str, Any] = {},
 ) -> tuple[Tensor, tuple[Tensor, ...] | Tensor]:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     past_key_values = DynamicCache()
 
     with torch.no_grad():
@@ -153,15 +144,6 @@ def dynamic_attention_sinks_generate(
     beta: int = 8,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     assert input_ids.shape[0] == 1
     prefill_input_len = input_ids.shape[1] - 1
     position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
@@ -258,15 +240,6 @@ def dynamic_attention_sinks_generate_v2(
     k: int,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     assert input_ids.shape[0] == 1
     prefill_input_len = input_ids.shape[1] - 1
     position_ids = torch.arange(prefill_input_len, device=input_ids.device)[None]  # type: ignore
@@ -302,6 +275,59 @@ def dynamic_attention_sinks_generate_v2(
                 cache_update_indices[block_idx][layer_idx],
                 layer_idx=layer_idx,
             )
+
+    cache_size = past_key_values.get_seq_length()
+    assert cache_size == min(block_size + k, prefill_input_len)
+
+    generated_ids: Tensor = model.generate(  # type: ignore
+        input_ids=input_ids[:, -cache_size - 1 :],
+        attention_mask=torch.ones_like(input_ids),
+        use_cache=True,
+        past_key_values=past_key_values,
+        **generation_kwargs,
+    )
+
+    return torch.cat((input_ids[:, : -cache_size - 1], generated_ids), dim=1)
+
+
+def dynamic_attention_sinks_generate_v3(
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
+    input_ids: Tensor,
+    reduced_attentions: Tensor,
+    block_size: int,
+    k: int,
+    generation_kwargs: dict[str, Any] = {},
+) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        update_llama_model_for_dynamic_attention_sinks(model)
+    elif isinstance(model, Qwen2ForCausalLM):
+        update_qwen2_model_for_dynamic_attention_sinks(model)
+    else:
+        raise NotImplementedError()
+
+    assert input_ids.shape[0] == 1
+    prefill_input_len = input_ids.shape[1] - 1
+
+    k = min(k, prefill_input_len - block_size)
+
+    indices = get_indices(
+        reduced_attentions[..., :-1],
+        k=k,
+        block_size=block_size,
+    ).to(input_ids.device)
+
+    past_key_values = DynamicCache()
+
+    with torch.no_grad():
+        _ = model(
+            input_ids=input_ids,
+            use_cache=True,
+            past_key_values=past_key_values,
+            dynamic_attention_sinks_block_size=block_size,
+            dynamic_attention_sinks_indices=indices,
+        )
+
+    past_key_values.crop(prefill_input_len)
 
     cache_size = past_key_values.get_seq_length()
     assert cache_size == min(block_size + k, prefill_input_len)
