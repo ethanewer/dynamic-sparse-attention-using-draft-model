@@ -8,7 +8,7 @@ from transformers import (  # type: ignore
     Qwen2ForCausalLM,
 )
 
-from .indices_util import get_cache_update_indices, get_indices
+from .indices_util import get_cache_update_indices, get_indices_and_attention_mask
 from .llama_util import update_llama_model_for_dynamic_attention_sinks
 from .qwen2_util import update_qwen2_model_for_dynamic_attention_sinks
 from .token_dropping_cache import TokenDroppingCache
@@ -294,17 +294,20 @@ def dynamic_attention_sinks_generate_v3(
 
     k = min(k, prefill_input_len - block_size)
 
-    indices = get_indices(
-        reduced_attentions[..., :-1],
+    indices, attention_mask = get_indices_and_attention_mask(
+        input_ids=input_ids[:, :-1],
+        reduced_attentions=reduced_attentions[..., :-1],
         k=k,
         block_size=block_size,
-    ).to(input_ids.device)
+        dtype=model.dtype,
+    )
 
     past_key_values = DynamicCache()
 
     with torch.no_grad():
         _ = model(
             input_ids=input_ids[:, :-1],
+            attention_mask=attention_mask,
             use_cache=True,
             past_key_values=past_key_values,
             dynamic_attention_sinks_block_size=block_size,

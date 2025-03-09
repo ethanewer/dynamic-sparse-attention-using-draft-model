@@ -47,6 +47,7 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
         ):
             assert self.config._attn_implementation == "sdpa"
             assert not kwargs.get("output_attentions", False)
+            assert attention_mask is not None
 
             if (
                 self.config.use_sliding_window

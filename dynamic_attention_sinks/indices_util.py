@@ -1,7 +1,9 @@
 import numpy as np
 import torch
 from numba import njit  # type: ignore
-from torch import Tensor
+from torch import Tensor, dtype
+
+from .dynamic_attention_sinks_attention import make_causal_mask
 
 
 @njit
@@ -61,26 +63,39 @@ def get_indices_np(
     return indices
 
 
-def get_indices(
+def get_indices_and_attention_mask(
+    input_ids: Tensor,
     reduced_attentions: Tensor,
     k: int,
     block_size: int,
-) -> Tensor:
+    dtype: dtype = torch.bfloat16,
+) -> tuple[Tensor, Tensor]:
     num_hidden_layers, batch_size, num_key_value_heads, input_len = (
         reduced_attentions.shape
     )
 
-    sorted_indices = reduced_attentions.argsort(dim=-1, descending=True).numpy()
-    indices = get_indices_np(
-        sorted_indices=sorted_indices,
-        k=k,
-        block_size=block_size,
-        batch_size=batch_size,
-        input_len=input_len,
-        num_hidden_layers=num_hidden_layers,
-        num_key_value_heads=num_key_value_heads,
+    indices = torch.tensor(
+        get_indices_np(
+            sorted_indices=reduced_attentions.argsort(dim=-1, descending=True).numpy(),
+            k=k,
+            block_size=block_size,
+            batch_size=batch_size,
+            input_len=input_len,
+            num_hidden_layers=num_hidden_layers,
+            num_key_value_heads=num_key_value_heads,
+        ),
+        device=input_ids.device,
     )
-    return torch.from_numpy(indices)
+
+    attention_mask = make_causal_mask(
+        indices=indices[0, :, :, :-1],
+        batch_size=batch_size,
+        seq_len=input_len,
+        block_size=block_size,
+        dtype=dtype,
+        device=input_ids.device,
+    )
+    return indices, attention_mask
 
 
 @njit

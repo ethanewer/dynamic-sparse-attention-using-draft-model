@@ -48,6 +48,7 @@ class LlamaAttentionDynamicAttentionSinks(LlamaAttention):
         ):
             assert self.config._attn_implementation == "sdpa"
             assert not kwargs.get("output_attentions", False)
+            assert attention_mask is not None
 
             block_size = kwargs["dynamic_attention_sinks_block_size"]
             indices = kwargs["dynamic_attention_sinks_indices"][self.layer_idx]
