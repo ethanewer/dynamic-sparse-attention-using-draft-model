@@ -12,7 +12,7 @@ def get_indices_np(
     k: int,
     block_size: int,
     batch_size: int,
-    input_len: int,
+    seq_len: int,
     num_hidden_layers: int,
     num_key_value_heads: int,
 ) -> np.ndarray:
@@ -21,19 +21,19 @@ def get_indices_np(
             num_hidden_layers,
             batch_size,
             num_key_value_heads,
-            (input_len + block_size - 1) // block_size + 1,
+            (seq_len + block_size - 1) // block_size + 1,
             2 * block_size + k,
         ),
-        fill_value=input_len,
+        fill_value=seq_len,
         dtype=np.int64,
     )
 
-    for block_idx in range((input_len + block_size - 1) // block_size + 1):
+    for block_idx in range((seq_len + block_size - 1) // block_size + 1):
         kv_block_start = min(
             max(0, (block_idx - 1) * block_size),
-            input_len - block_size,
+            seq_len - block_size,
         )
-        kv_block_end = min(input_len, (block_idx + 1) * block_size)
+        kv_block_end = min(seq_len, (block_idx + 1) * block_size)
         kv_block_size = kv_block_end - kv_block_start
 
         indices[..., block_idx, k : k + kv_block_size] = np.arange(
@@ -42,7 +42,7 @@ def get_indices_np(
         )
 
         if block_idx > 1:
-            block_start = min(block_idx * block_size, input_len)
+            block_start = min(block_idx * block_size, seq_len)
             for layer_idx in range(num_hidden_layers):
                 for batch_idx in range(batch_size):
                     for head_idx in range(num_key_value_heads):
@@ -70,7 +70,7 @@ def get_indices_and_attention_mask(
     block_size: int,
     dtype: dtype = torch.bfloat16,
 ) -> tuple[Tensor, Tensor]:
-    num_hidden_layers, batch_size, num_key_value_heads, input_len = (
+    num_hidden_layers, batch_size, num_key_value_heads, seq_len = (
         reduced_attentions.shape
     )
 
@@ -80,7 +80,7 @@ def get_indices_and_attention_mask(
             k=k,
             block_size=block_size,
             batch_size=batch_size,
-            input_len=input_len,
+            seq_len=seq_len,
             num_hidden_layers=num_hidden_layers,
             num_key_value_heads=num_key_value_heads,
         ),
@@ -90,12 +90,13 @@ def get_indices_and_attention_mask(
     attention_mask = make_causal_mask(
         indices=indices[0, :, :, :-1],
         batch_size=batch_size,
-        seq_len=input_len,
+        seq_len=seq_len,
         block_size=block_size,
         dtype=dtype,
         device=input_ids.device,
     )
-    return indices, attention_mask
+
+    return indices.clamp_max_(seq_len - 1), attention_mask
 
 
 @njit
@@ -104,7 +105,7 @@ def get_sink_indices_np(
     k: int,
     block_size: int,
     batch_size: int,
-    input_len: int,
+    seq_len: int,
     num_hidden_layers: int,
     num_key_value_heads: int,
 ) -> np.ndarray:
@@ -113,7 +114,7 @@ def get_sink_indices_np(
             num_hidden_layers,
             batch_size,
             num_key_value_heads,
-            (input_len + block_size - 1) // block_size,
+            (seq_len + block_size - 1) // block_size,
             k,
         ),
         dtype=np.int64,
@@ -122,8 +123,8 @@ def get_sink_indices_np(
     for layer_idx in range(num_hidden_layers):
         for batch_idx in range(batch_size):
             for head_idx in range(num_key_value_heads):
-                for block_idx in range((input_len + block_size - 1) // block_size):
-                    block_end = min((block_idx + 1) * block_size, input_len)
+                for block_idx in range((seq_len + block_size - 1) // block_size):
+                    block_end = min((block_idx + 1) * block_size, seq_len)
                     i = 0
                     for j in sorted_indices[layer_idx, batch_idx, head_idx]:
                         if j < block_end - block_size:
@@ -146,7 +147,7 @@ def get_sink_indices(
     k: int,
     block_size: int,
 ) -> Tensor:
-    num_hidden_layers, batch_size, num_key_value_heads, input_len = (
+    num_hidden_layers, batch_size, num_key_value_heads, seq_len = (
         reduced_attentions.shape
     )
     sorted_indices = reduced_attentions.argsort(dim=-1, descending=True).numpy()
@@ -155,7 +156,7 @@ def get_sink_indices(
         k=k,
         block_size=block_size,
         batch_size=batch_size,
-        input_len=input_len,
+        seq_len=seq_len,
         num_hidden_layers=num_hidden_layers,
         num_key_value_heads=num_key_value_heads,
     )
@@ -169,10 +170,10 @@ def update_indices_np(
     block_idx: int,
     block_size: int,
     k: int,
-    input_len: int,
+    seq_len: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     block_start = block_idx * block_size
-    block_end = min((block_idx + 1) * block_size, input_len)
+    block_end = min((block_idx + 1) * block_size, seq_len)
     real_block_size = block_end - block_start
 
     num_hidden_layers, batch_size, num_key_value_heads = sink_indices.shape[:3]
@@ -245,7 +246,7 @@ def update_indices(
     block_idx: int,
     block_size: int,
     k: int,
-    input_len: int,
+    seq_len: int,
 ) -> tuple[Tensor, Tensor]:
     selected_indices, new_cache_seq_indices = update_indices_np(
         sink_indices=sink_indices.numpy(),
@@ -253,7 +254,7 @@ def update_indices(
         block_idx=block_idx,
         block_size=block_size,
         k=k,
-        input_len=input_len,
+        seq_len=seq_len,
     )
     return torch.from_numpy(selected_indices), torch.from_numpy(new_cache_seq_indices)
 
@@ -265,7 +266,7 @@ def get_cache_update_indices(
     reduce_heads: bool = False,
     device: str = "cpu",
 ) -> list[Tensor]:
-    num_hidden_layers, batch_size, num_key_value_heads, input_len = (
+    num_hidden_layers, batch_size, num_key_value_heads, seq_len = (
         reduced_attentions.shape
     )
 
@@ -275,26 +276,26 @@ def get_cache_update_indices(
         k=k,
         block_size=block_size,
         batch_size=batch_size,
-        input_len=input_len,
+        seq_len=seq_len,
         num_hidden_layers=num_hidden_layers,
         num_key_value_heads=num_key_value_heads,
     )
 
     cache_seq_indices = np.zeros(
-        (num_hidden_layers, input_len, num_key_value_heads, 0),
+        (num_hidden_layers, seq_len, num_key_value_heads, 0),
         dtype=np.int64,
     )
 
     cache_update_indices = []
 
-    for block_idx in range((input_len + block_size - 1) // block_size):
+    for block_idx in range((seq_len + block_size - 1) // block_size):
         block_selected_indices, cache_seq_indices = update_indices_np(
             sink_indices=sink_indices,
             cache_seq_indices=cache_seq_indices,
             block_idx=block_idx,
             block_size=block_size,
             k=k,
-            input_len=input_len,
+            seq_len=seq_len,
         )
 
         if reduce_heads:
