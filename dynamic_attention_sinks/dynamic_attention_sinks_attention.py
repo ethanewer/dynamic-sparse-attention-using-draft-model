@@ -1,48 +1,11 @@
-import os
-import time
 from typing import Optional
 
-import psutil  # type: ignore
 import torch
 import torch.nn.functional as F
 from torch import Tensor, dtype
 from torch.types import Device
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
-
-
-def log_metrics(stage, start_time, start_mem):
-    end_time = time.time()
-    if torch.cuda.is_available():
-        end_mem = torch.cuda.memory_allocated()
-    else:
-        process = psutil.Process(os.getpid())
-        end_mem = process.memory_info().rss
-
-    print(f"{stage:32} | {end_time - start_time:.2e}s, {end_mem - start_mem:.2e} bytes")
-    return end_time, end_mem
-
-
-def repeat_block(block: Tensor, num_repeat: int) -> Tensor:
-    batch_size, num_key_value_heads, num_blocks, block_dim, head_dim = block.shape
-    if num_repeat == 1:
-        return block
-
-    block = block[:, :, None, :, :].expand(
-        batch_size,
-        num_key_value_heads,
-        num_repeat,
-        num_blocks,
-        block_dim,
-        head_dim,
-    )
-    return block.reshape(
-        batch_size,
-        num_key_value_heads * num_repeat,
-        num_blocks,
-        block_dim,
-        head_dim,
-    )
 
 
 def stack_block_along_batch(block: Tensor, num_key_value_groups: int = 1) -> Tensor:
