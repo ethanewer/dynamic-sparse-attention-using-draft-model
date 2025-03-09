@@ -1,8 +1,9 @@
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import torch
 from torch import Tensor
 from transformers import (  # type: ignore
+    Cache,
     DynamicCache,
     LlamaForCausalLM,
     Qwen2ForCausalLM,
@@ -281,14 +282,17 @@ def dynamic_attention_sinks_generate_v3(
     reduced_attentions: Tensor,
     block_size: int,
     k: int,
+    past_key_values: Optional[Cache] = None,
+    update_model: bool = True,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        update_llama_model_for_dynamic_attention_sinks(model)
-    elif isinstance(model, Qwen2ForCausalLM):
-        update_qwen2_model_for_dynamic_attention_sinks(model)
-    else:
-        raise NotImplementedError()
+    if update_model:
+        if isinstance(model, LlamaForCausalLM):
+            update_llama_model_for_dynamic_attention_sinks(model)
+        elif isinstance(model, Qwen2ForCausalLM):
+            update_qwen2_model_for_dynamic_attention_sinks(model)
+        else:
+            raise NotImplementedError()
 
     prefill_input_len = input_ids.shape[1] - 1
 
@@ -302,7 +306,10 @@ def dynamic_attention_sinks_generate_v3(
         dtype=model.dtype,
     )
 
-    past_key_values = DynamicCache()
+    if past_key_values is None:
+        past_key_values = DynamicCache()
+
+    cache_position = torch.arange(prefill_input_len, device=input_ids.device)
 
     with torch.no_grad():
         _ = model(
@@ -310,11 +317,10 @@ def dynamic_attention_sinks_generate_v3(
             attention_mask=attention_mask,
             use_cache=True,
             past_key_values=past_key_values,
+            cache_position=cache_position,
             dynamic_attention_sinks_block_size=block_size,
             dynamic_attention_sinks_indices=indices,
         )
-
-    past_key_values.crop(prefill_input_len)
 
     cache_size = past_key_values.get_seq_length()
     assert cache_size == min(block_size + k, prefill_input_len)

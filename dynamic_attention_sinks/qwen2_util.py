@@ -65,11 +65,20 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
                 head_dim = key_states.shape[-1]
                 cache_indices = indices[:, :, -1, :-block_size]
                 cache_indices = cache_indices[..., None].expand(-1, -1, -1, head_dim)
+                compressed_key = key_states.gather(dim=2, index=cache_indices)
+                compressed_value = value_states.gather(dim=2, index=cache_indices)
+                cache_kwargs = {
+                    "cache_position": cache_position[: compressed_key.shape[-2]]
+                    if cache_position is not None
+                    else None
+                }
                 past_key_value.update(
-                    key_states.gather(dim=2, index=cache_indices),
-                    value_states.gather(dim=2, index=cache_indices),
+                    compressed_key,
+                    compressed_value,
                     self.layer_idx,
+                    cache_kwargs,
                 )
+                del compressed_key, compressed_value
 
             attn_output, attn_weights = dynamic_attention_sinks_attention_forward(
                 self,
@@ -86,12 +95,15 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
             if past_key_value is not None:
                 # sin and cos are specific to RoPE models; cache_position needed for the static cache
                 cache_kwargs = {
-                    "sin": sin,
-                    "cos": cos,
+                    "sin": sin,  # type: ignore
+                    "cos": cos,  # type: ignore
                     "cache_position": cache_position,
                 }
                 key_states, value_states = past_key_value.update(
-                    key_states, value_states, self.layer_idx, cache_kwargs
+                    key_states,
+                    value_states,
+                    self.layer_idx,
+                    cache_kwargs,
                 )
 
             attention_interface: Callable = eager_attention_forward
