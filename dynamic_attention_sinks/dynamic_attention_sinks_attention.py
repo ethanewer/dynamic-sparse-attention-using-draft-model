@@ -120,7 +120,21 @@ def dynamic_attention_sinks_attention_forward(
     assert query.shape[-2] % block_size == 0, query.shape
     assert causal_mask.shape[-2] % block_size == 0, causal_mask.shape
 
-    block_query = query.view(
+    mask_expanded_indices = indices[
+        : causal_mask.shape[0], : causal_mask.shape[1], :, None, :
+    ].expand(-1, -1, -1, block_size, -1)
+
+    causal_mask = causal_mask.view(
+        causal_mask.shape[0],
+        causal_mask.shape[1],
+        query.shape[2] // block_size,
+        block_size,
+        -1,
+    ).gather(dim=4, index=mask_expanded_indices)
+
+    del mask_expanded_indices
+
+    query = query.view(
         query.shape[0],
         query.shape[1],
         query.shape[2] // block_size,
@@ -128,20 +142,18 @@ def dynamic_attention_sinks_attention_forward(
         query.shape[3],
     )
 
-    del query
-
     kv_expanded_indices = (
-        indices.view(indices.shape[0], indices.shape[1], -1, 1)
+        indices.clamp_max_(key.shape[2] - 1)
+        .view(indices.shape[0], indices.shape[1], -1, 1)
         .expand(-1, -1, -1, key.shape[3])
-        .relu()
     )
 
-    block_key = key.gather(
+    key = key.gather(
         dim=2,
         index=kv_expanded_indices,
     ).view(key.shape[0], key.shape[1], indices.shape[2], indices.shape[3], key.shape[3])
 
-    block_value = value.gather(
+    value = value.gather(
         dim=2,
         index=kv_expanded_indices,
     ).view(
@@ -152,43 +164,27 @@ def dynamic_attention_sinks_attention_forward(
         value.shape[3],
     )
 
-    del key, value, kv_expanded_indices
+    del kv_expanded_indices
 
-    mask_expanded_indices = (
-        indices[: causal_mask.shape[0], : causal_mask.shape[1], :, None, :]
-        .expand(-1, -1, -1, block_size, -1)
-        .relu()
-    )
-
-    block_mask = causal_mask.view(
-        causal_mask.shape[0],
-        causal_mask.shape[1],
-        block_query.shape[2],
-        block_query.shape[3],
-        -1,
-    ).gather(dim=4, index=mask_expanded_indices)
-
-    del causal_mask, mask_expanded_indices
-
-    # print(f"{block_query.numel()=}, {block_key.numel()=}, {block_value.numel()=}")
+    # print(f"{query.numel()=}, {key.numel()=}, {value.numel()=}")
 
     if hasattr(module, "num_key_value_groups"):
         num_key_value_groups = module.num_key_value_groups
     else:
         num_key_value_groups = 1
 
-    block_query = stack_block_along_batch(block_query)
-    block_key = stack_block_along_batch(block_key, num_key_value_groups)
-    block_value = stack_block_along_batch(block_value, num_key_value_groups)
-    block_mask = stack_block_along_batch(block_mask)
+    query = stack_block_along_batch(query)
+    key = stack_block_along_batch(key, num_key_value_groups)
+    value = stack_block_along_batch(value, num_key_value_groups)
+    causal_mask = stack_block_along_batch(causal_mask)
 
-    # print(f"{block_query.numel()=}, {block_key.numel()=}, {block_value.numel()=}\n")
+    # print(f"{query.numel()=}, {key.numel()=}, {value.numel()=}\n")
 
     attn_output = F.scaled_dot_product_attention(
-        block_query,
-        block_key,
-        block_value,
-        attn_mask=block_mask,
+        query,
+        key,
+        value,
+        attn_mask=causal_mask,
         dropout_p=dropout,
         scale=scaling,
     )
