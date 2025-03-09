@@ -100,7 +100,7 @@ def make_causal_mask(
     return causal_mask
 
 
-def dynamic_attention_sinks_attention_forward(
+def das_attention_forward(
     module: LlamaAttention | Qwen2Attention,
     query: Tensor,
     key: Tensor,
@@ -108,17 +108,14 @@ def dynamic_attention_sinks_attention_forward(
     attention_mask: Optional[Tensor],
     block_size: int,
     indices: Tensor,
+    origional_seq_len: int,
     dropout: float = 0.0,
     scaling: Optional[float] = None,
 ) -> tuple[Tensor, None]:
     batch_size = query.shape[0]
-    origional_seq_len = query.shape[-2]
+    # origional_seq_len = query.shape[-2]
 
     causal_mask = attention_mask
-
-    pad = -query.shape[-2] % block_size
-    if pad > 0:
-        query = F.pad(query, (0, 0, 0, pad))
 
     query = query.view(
         query.shape[0],
@@ -174,3 +171,16 @@ def dynamic_attention_sinks_attention_forward(
     attn_output = unstack_attn(attn_output, batch_size, origional_seq_len)
 
     return attn_output, None
+
+
+gpu_ok = False
+if torch.cuda.is_available():
+    device_cap = torch.cuda.get_device_capability()
+    if device_cap in ((7, 0), (8, 0), (9, 0)):
+        gpu_ok = True
+
+
+if gpu_ok:
+    dynamic_attention_sinks_attention_forward = torch.compile(das_attention_forward)
+else:
+    dynamic_attention_sinks_attention_forward = das_attention_forward

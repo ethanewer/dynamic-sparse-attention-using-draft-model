@@ -72,6 +72,11 @@ class LlamaAttentionDynamicAttentionSinks(LlamaAttention):
                 )
                 del compressed_key, compressed_value
 
+            seq_len = query_states.shape[-2]
+            pad = -seq_len % block_size
+            if pad > 0:
+                query_states = torch.nn.functional.pad(query_states, (0, 0, 0, pad))
+
             attn_output, attn_weights = dynamic_attention_sinks_attention_forward(
                 self,
                 query_states,
@@ -80,6 +85,7 @@ class LlamaAttentionDynamicAttentionSinks(LlamaAttention):
                 attention_mask,
                 block_size=block_size,
                 indices=indices[:, :, :-1],
+                origional_seq_len=seq_len,
                 dropout=0.0 if not self.training else self.attention_dropout,
                 scaling=self.scaling,
             )
