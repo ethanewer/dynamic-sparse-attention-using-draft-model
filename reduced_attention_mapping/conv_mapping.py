@@ -1,4 +1,4 @@
-from typing import Self, Optional
+from typing import Optional, Self
 
 import numpy as np
 import torch
@@ -13,14 +13,12 @@ class ConvAttentionMapping(AttentionMapping):
     model: Optional[nn.Sequential] = None
     num_full_layers: Optional[int] = None
     num_full_heads: Optional[int] = None
-    dtype: Optional[torch.dtype] = None,
-    device: Optional[torch.device | str] = None,
-    
+    dtype: Optional[torch.dtype] = None
+    device: Optional[torch.device | str] = None
 
     def __init__(self, path: Optional[str] = None) -> None:
         if path is not None:
             self.model = torch.load(path, weights_only=False)
-            self.model.eval()
 
     def stack(self, a: Tensor) -> Tensor:
         num_layers, batch_size, num_heads, seq_len = a.shape
@@ -30,14 +28,18 @@ class ConvAttentionMapping(AttentionMapping):
         assert self.num_full_layers is not None and self.num_full_heads is not None
         batch_size, _, seq_len = a.shape
         return a.view(
-            batch_size, 
+            batch_size,
             self.num_full_layers,
             self.num_full_heads,
             seq_len,
         ).transpose(0, 1)
-        
+
     def map_single(self, a: Tensor) -> Tensor:
-        assert self.model is not None and self.dtype is not None and self.device is not None
+        assert (
+            self.model is not None
+            and self.dtype is not None
+            and self.device is not None
+        )
 
         if a.dtype != self.dtype:
             a = a.to(dtype=self.dtype)
@@ -46,9 +48,8 @@ class ConvAttentionMapping(AttentionMapping):
             a = a.to(device=self.device)
 
         a /= a.sum(dim=-1)[..., None]
-        
+
         return self.unstack(self.model(self.stack(a)))
-        
 
     def __call__(self, draft_reduced_attentions: T) -> T:
         if isinstance(draft_reduced_attentions, list):
@@ -84,7 +85,7 @@ class LinearConvMapping(ConvAttentionMapping):
                 stride=1,
                 padding="same",
                 padding_mode="replicate",
-                bias=None,
+                bias=False,
                 device=device,
                 dtype=dtype,
             ),
@@ -117,7 +118,7 @@ class LinearConvMapping(ConvAttentionMapping):
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
 
         return self
-    
+
 
 class NonlinearConvMapping(ConvAttentionMapping):
     def fit(
@@ -142,7 +143,7 @@ class NonlinearConvMapping(ConvAttentionMapping):
                 stride=1,
                 padding="same",
                 padding_mode="replicate",
-                bias=None,
+                bias=False,
                 device=device,
                 dtype=dtype,
             ),
@@ -154,7 +155,7 @@ class NonlinearConvMapping(ConvAttentionMapping):
                 stride=1,
                 padding="same",
                 padding_mode="replicate",
-                bias=None,
+                bias=False,
                 device=device,
                 dtype=dtype,
             ),
@@ -176,9 +177,8 @@ class NonlinearConvMapping(ConvAttentionMapping):
                 x = draft_reduced_attentions[i].to(device, dtype)
                 y = full_reduced_attentions[i].to(device, dtype)
                 y /= y.sum(dim=-1)[..., None]
-                y_hat = self(x)
                 optimizer.zero_grad()
-                loss = F.kl_div(y_hat.log(), y, reduction="batchmean")
+                loss = F.kl_div(self(x).log(), y, reduction="batchmean")
                 loss.backward()
                 optimizer.step()
                 losses.append(loss.item())
