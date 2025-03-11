@@ -81,9 +81,6 @@ def make_causal_mask(
         device=device,
     ).triu_(1)
 
-    assert causal_mask is not None
-    assert causal_mask.shape[-2] % block_size == 0, causal_mask.shape
-
     mask_expanded_indices = indices[
         : causal_mask.shape[0], : causal_mask.shape[1], :, None, :
     ].expand(-1, -1, -1, block_size, -1)
@@ -113,9 +110,6 @@ def das_attention_forward(
     scaling: Optional[float] = None,
 ) -> tuple[Tensor, None]:
     batch_size = query.shape[0]
-    # origional_seq_len = query.shape[-2]
-
-    causal_mask = attention_mask
 
     query = query.view(
         query.shape[0],
@@ -125,7 +119,7 @@ def das_attention_forward(
         query.shape[3],
     )
 
-    kv_expanded_indices = indices.view(
+    expanded_indices = indices.view(
         indices.shape[0],
         indices.shape[1],
         -1,
@@ -134,12 +128,18 @@ def das_attention_forward(
 
     key = key.gather(
         dim=2,
-        index=kv_expanded_indices,
-    ).view(key.shape[0], key.shape[1], indices.shape[2], indices.shape[3], key.shape[3])
+        index=expanded_indices,
+    ).view(
+        key.shape[0],
+        key.shape[1],
+        indices.shape[2],
+        indices.shape[3],
+        key.shape[3],
+    )
 
     value = value.gather(
         dim=2,
-        index=kv_expanded_indices,
+        index=expanded_indices,
     ).view(
         value.shape[0],
         value.shape[1],
@@ -148,7 +148,7 @@ def das_attention_forward(
         value.shape[3],
     )
 
-    del indices, kv_expanded_indices
+    del indices, expanded_indices
 
     if hasattr(module, "num_key_value_groups"):
         num_key_value_groups = module.num_key_value_groups
@@ -163,7 +163,7 @@ def das_attention_forward(
         query,
         key,
         value,
-        attn_mask=causal_mask,
+        attn_mask=attention_mask,
         dropout_p=dropout,
         scale=scaling,
     )
@@ -181,6 +181,8 @@ if torch.cuda.is_available():
 
 
 if gpu_ok:
+    print("Using compiled dynamic_attention_sinks_attention_forward.")
     dynamic_attention_sinks_attention_forward = torch.compile(das_attention_forward)
 else:
+    print("Not using compiled dynamic_attention_sinks_attention_forward.")
     dynamic_attention_sinks_attention_forward = das_attention_forward
