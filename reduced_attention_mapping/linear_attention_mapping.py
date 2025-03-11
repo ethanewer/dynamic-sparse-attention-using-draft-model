@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from tqdm.notebook import trange
+from tqdm.notebook import trange  # type: ignore
 
 from .attention_mapping import AttentionMapping, T
 
@@ -88,7 +88,7 @@ class KLDivAttentionMapping(LinearAttentionMapping):
 
         self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach().cpu()
         return self
-    
+
 
 class MSEAttentionMapping(LinearAttentionMapping):
     def fit(
@@ -134,7 +134,7 @@ class MSEAttentionMapping(LinearAttentionMapping):
 
         self.w = self.w.cpu().detach()
         return self
-    
+
 
 class GreedyAttentionMapping(LinearAttentionMapping):
     @staticmethod
