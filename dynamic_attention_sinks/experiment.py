@@ -1,31 +1,24 @@
-from typing import Callable
-
 import torch
 from torch import Tensor
-from transformers import LlamaForCausalLM, Qwen2ForCausalLM  # type: ignore
-from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
-from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
+from transformers import (  # type: ignore
+    DynamicCache,
+    LlamaForCausalLM,
+    Qwen2ForCausalLM,
+)
 
+from .indices_util import get_cache_update_indices, get_indices_and_attention_mask
+from .llama_util import update_llama_model_for_dynamic_attention_sinks
+from .qwen2_util import update_qwen2_model_for_dynamic_attention_sinks
 from .token_dropping_cache import TokenDroppingCache
-from .indices_util import get_cache_update_indices
 
 
 def streaming_llm_experiment(
-    model: Callable,
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generated_ids: Tensor,
     window_size: int,
     n_sinks: int,
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
@@ -86,22 +79,13 @@ def streaming_llm_experiment(
 
 
 def dynamic_attention_sinks_experiment(
-    model: Callable,
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generated_ids: Tensor,
     reduced_attentions: Tensor,
     block_size: int,
     k: int,
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     assert input_ids.shape[0] == 1
     input_len = input_ids.shape[1]
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
@@ -159,22 +143,13 @@ def dynamic_attention_sinks_experiment(
 
 
 def dynamic_attention_sinks_v2_experiment(
-    model: Callable,
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generated_ids: Tensor,
     reduced_attentions: Tensor,
     block_size: int,
     k: int,
 ) -> Tensor:
-    if isinstance(model, LlamaForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, LlamaAttention)
-    elif isinstance(model, Qwen2ForCausalLM):
-        for layer in model.model.layers:
-            assert isinstance(layer.self_attn, Qwen2Attention)
-    else:
-        raise NotImplementedError()
-
     input_len = input_ids.shape[1]
 
     position_ids = torch.arange(input_len, device=input_ids.device)[None]
@@ -212,6 +187,64 @@ def dynamic_attention_sinks_v2_experiment(
             )
 
     assert past_key_values.get_seq_length() == block_size + k
+
+    logits = []
+    for i in range(input_len + 1, generated_ids.shape[1]):
+        input_ids = generated_ids[:, i - 1 : i]
+        position_ids = torch.tensor([[i - 1]], device=input_ids.device)
+
+        with torch.no_grad():
+            outputs = model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=past_key_values,
+            )
+
+        logits.append(outputs.logits[0, -1:])
+
+    return torch.cat(logits).float().cpu()
+
+
+def dynamic_attention_sinks_v3_experiment(
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
+    input_ids: Tensor,
+    generated_ids: Tensor,
+    reduced_attentions: Tensor,
+    block_size: int,
+    k: int,
+) -> Tensor:
+    if isinstance(model, LlamaForCausalLM):
+        update_llama_model_for_dynamic_attention_sinks(model)
+    elif isinstance(model, Qwen2ForCausalLM):
+        update_qwen2_model_for_dynamic_attention_sinks(model)
+    else:
+        raise NotImplementedError()
+
+    input_len = input_ids.shape[1]
+    k = min(k, input_len - block_size)
+
+    indices, attention_mask = get_indices_and_attention_mask(
+        input_ids=input_ids,
+        reduced_attentions=reduced_attentions,
+        k=k,
+        block_size=block_size,
+        dtype=model.dtype,
+    )
+
+    past_key_values = DynamicCache()
+
+    with torch.no_grad():
+        _ = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            past_key_values=past_key_values,
+            dynamic_attention_sinks_block_size=block_size,
+            dynamic_attention_sinks_indices=indices,
+        )
+
+    assert past_key_values.get_seq_length() == min(block_size + k, input_len)
 
     logits = []
     for i in range(input_len + 1, generated_ids.shape[1]):
