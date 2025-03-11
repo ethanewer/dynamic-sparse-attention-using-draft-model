@@ -1,11 +1,13 @@
-from .attention_mapping import AttentionMapping
-from .greedy_attention_mapping import GreedyAttentionMapping
-from .kl_div_mapping import KLDivAttentionMapping
-from .mse_attention_mapping import MSEAttentionMapping
+from .linear_attention_mapping import LinearAttentionMapping, GreedyAttentionMapping, KLDivAttentionMapping, MSEAttentionMapping
+from .conv_mapping import LinearConvMapping, NonlinearConvMapping
+from .util import topk_overlap
 
 __all__ = [
-    "AttentionMapping",
+    "LinearAttentionMapping",
     "GreedyAttentionMapping",
     "MSEAttentionMapping",
     "KLDivAttentionMapping",
+    "topk_overlap",
+    "LinearConvMapping",
+    "NonlinearConvMapping",
 ]
