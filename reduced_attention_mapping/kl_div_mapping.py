@@ -33,6 +33,7 @@ class KLDivAttentionMapping(AttentionMapping):
             num_draft_heads * num_draft_layers,
             num_full_heads * num_full_layers,
             requires_grad=True,
+            dtype=dtype,
             device=device,
         )
 
