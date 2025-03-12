@@ -11,14 +11,143 @@ from .attention_mapping import AttentionMapping, T
 
 class ConvAttentionMapping(AttentionMapping):
     model: Optional[nn.Sequential] = None
+    num_draft_layers: Optional[int] = None
+    num_draft_heads: Optional[int] = None
     num_full_layers: Optional[int] = None
     num_full_heads: Optional[int] = None
-    dtype: Optional[torch.dtype] = None
-    device: Optional[torch.device | str] = None
 
-    def __init__(self, path: Optional[str] = None) -> None:
+    def __init__(
+        self, 
+        path: Optional[str] = None,
+        num_hidden_layers: int = 4,
+        num_hidden_channels: int = 512,
+        kernel_size: int = 5,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        self.num_hidden_layers = num_hidden_layers
+        self.num_hidden_channels = num_hidden_channels
+        self.kernel_size = kernel_size
+        self.dtype = dtype
+        self.device = device
         if path is not None:
-            self.model = torch.load(path, weights_only=False)
+            self.model = torch.load(path, weights_only=False).to(device, dtype)
+
+    def init_model(self) -> None:
+        assert (
+            self.num_draft_layers is not None
+            and self.num_draft_heads is not None
+            and self.num_full_layers is not None
+            and self.num_full_heads is not None
+        )
+
+        num_draft_channels = self.num_draft_layers * self.num_draft_heads
+        num_full_channels = self.num_full_layers * self.num_full_heads
+
+        layers = [
+            nn.Conv1d(
+                in_channels=num_draft_channels,
+                out_channels=self.num_hidden_channels,
+                kernel_size=self.kernel_size,
+                stride=1,
+                padding="same",
+                padding_mode="replicate",
+                device=self.device,
+                dtype=self.dtype,
+            ),
+            nn.GELU(),
+        ]
+
+        for _ in range(self.num_hidden_layers - 1):
+            layers.append(
+                nn.Conv1d(
+                    in_channels=self.num_hidden_channels,
+                    out_channels=self.num_hidden_channels,
+                    kernel_size=self.kernel_size,
+                    stride=1,
+                    padding="same",
+                    padding_mode="replicate",
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+            )
+            layers.append(nn.GELU())
+        
+        layers.append(
+            nn.Conv1d(
+                in_channels=self.num_hidden_channels,
+                out_channels=num_full_channels,
+                kernel_size=self.kernel_size,
+                stride=1,
+                padding="same",
+                padding_mode="replicate",
+                device=self.device,
+                dtype=self.dtype,
+            )
+        )
+        layers.append(nn.Softmax(dim=-1))
+        self.model = nn.Sequential(*layers)
+       
+    def fit(
+        self,
+        draft_reduced_attentions: list[Tensor],
+        full_reduced_attentions: list[Tensor],
+        test_draft_reduced_attentions: Optional[list[Tensor]] = None,
+        test_full_reduced_attentions: Optional[list[Tensor]] = None,
+        num_iters: int = 10,
+        lr: float = 5e-4,
+    ) -> Self:
+        self.num_draft_layers = draft_reduced_attentions[0].shape[0]
+        self.num_draft_heads = draft_reduced_attentions[0].shape[2]
+        self.num_full_layers = full_reduced_attentions[0].shape[0]
+        self.num_full_heads = full_reduced_attentions[0].shape[2]
+
+        self.init_model()
+
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
+        min_test_loss = float("inf")
+
+        progress_bar = trange(num_iters, desc="[]")
+        for _ in progress_bar:
+            train_losses = []
+            for i in np.random.permutation(len(draft_reduced_attentions)):
+                x = draft_reduced_attentions[i].to(self.device, self.dtype)
+                y = full_reduced_attentions[i].to(self.device, self.dtype)
+                y /= y.sum(dim=-1)[..., None]
+                optimizer.zero_grad()
+                loss = F.kl_div(self(x).log(), y, reduction="batchmean")
+                loss.backward()
+                optimizer.step()
+                train_losses.append(loss.item())
+
+            scheduler.step()
+            train_loss = sum(train_losses) / len(train_losses)
+
+            if test_draft_reduced_attentions is not None and test_full_reduced_attentions is not None:
+                test_losses = []
+                for i in range(len(test_draft_reduced_attentions)):
+                    x = test_draft_reduced_attentions[i].to(self.device, self.dtype)
+                    y = test_full_reduced_attentions[i].to(self.device, self.dtype)
+                    y /= y.sum(dim=-1)[..., None]
+                    with torch.no_grad():
+                        loss = F.kl_div(self(x).log(), y, reduction="batchmean")
+
+                    test_losses.append(loss.item())
+
+                test_loss = sum(test_losses) / len(test_losses)
+                min_test_loss = min(min_test_loss, test_loss)
+                progress_bar.set_description(
+                    f"[train loss: {train_loss:.4f}, test loss: {test_loss:.4f}, min test loss: {min_test_loss:.4f}]"
+                )
+            else:
+                progress_bar.set_description(f"[train loss: {train_loss:.4f}]")
+
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        return self
+
 
     def stack(self, a: Tensor) -> Tensor:
         num_layers, batch_size, num_heads, seq_len = a.shape
@@ -50,7 +179,7 @@ class ConvAttentionMapping(AttentionMapping):
         a /= a.sum(dim=-1)[..., None]
 
         return self.unstack(self.model(self.stack(a)))
-
+    
     def __call__(self, draft_reduced_attentions: T) -> T:
         if isinstance(draft_reduced_attentions, list):
             return [self.map_single(a) for a in draft_reduced_attentions]
@@ -60,130 +189,3 @@ class ConvAttentionMapping(AttentionMapping):
     def save(self, path: str) -> None:
         assert self.model is not None
         torch.save(self.model, path)
-
-
-class LinearConvMapping(ConvAttentionMapping):
-    def fit(
-        self,
-        draft_reduced_attentions: list[Tensor],
-        full_reduced_attentions: list[Tensor],
-        kernel_size: int = 5,
-        num_iters: int = 10,
-        dtype: torch.dtype = torch.float32,
-        device: torch.device | str = "cpu",
-    ) -> Self:
-        num_draft_layers = draft_reduced_attentions[0].shape[0]
-        num_draft_heads = draft_reduced_attentions[0].shape[2]
-        num_full_layers = full_reduced_attentions[0].shape[0]
-        num_full_heads = full_reduced_attentions[0].shape[2]
-
-        self.model = nn.Sequential(
-            nn.Conv1d(
-                in_channels=num_draft_layers * num_draft_heads,
-                out_channels=num_full_layers * num_full_heads,
-                kernel_size=kernel_size,
-                stride=1,
-                padding="same",
-                padding_mode="replicate",
-                bias=False,
-                device=device,
-                dtype=dtype,
-            ),
-            nn.Softmax(dim=-1),
-        )
-
-        self.num_full_heads = num_full_heads
-        self.num_full_layers = num_full_layers
-        self.dtype = dtype
-        self.device = device
-
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
-
-        progress_bar = trange(num_iters, desc="[loss: NaN]")
-        for _ in progress_bar:
-            losses = []
-            for i in np.random.permutation(len(draft_reduced_attentions)):
-                x = draft_reduced_attentions[i].to(device, dtype)
-                y = full_reduced_attentions[i].to(device, dtype)
-                y /= y.sum(dim=-1)[..., None]
-                y_hat = self(x)
-                optimizer.zero_grad()
-                loss = F.kl_div(y_hat.log(), y, reduction="batchmean")
-                loss.backward()
-                optimizer.step()
-                losses.append(loss.item())
-
-            scheduler.step()
-            progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
-
-        return self
-
-
-class NonlinearConvMapping(ConvAttentionMapping):
-    def fit(
-        self,
-        draft_reduced_attentions: list[Tensor],
-        full_reduced_attentions: list[Tensor],
-        kernel_size: int = 5,
-        num_iters: int = 10,
-        dtype: torch.dtype = torch.float32,
-        device: torch.device | str = "cpu",
-    ) -> Self:
-        num_draft_layers = draft_reduced_attentions[0].shape[0]
-        num_draft_heads = draft_reduced_attentions[0].shape[2]
-        num_full_layers = full_reduced_attentions[0].shape[0]
-        num_full_heads = full_reduced_attentions[0].shape[2]
-
-        self.model = nn.Sequential(
-            nn.Conv1d(
-                in_channels=num_draft_layers * num_draft_heads,
-                out_channels=2 * num_full_layers * num_full_heads,
-                kernel_size=kernel_size,
-                stride=1,
-                padding="same",
-                padding_mode="replicate",
-                bias=False,
-                device=device,
-                dtype=dtype,
-            ),
-            nn.GELU(),
-            nn.Conv1d(
-                in_channels=2 * num_full_layers * num_full_heads,
-                out_channels=num_full_layers * num_full_heads,
-                kernel_size=kernel_size,
-                stride=1,
-                padding="same",
-                padding_mode="replicate",
-                bias=False,
-                device=device,
-                dtype=dtype,
-            ),
-            nn.Softmax(dim=-1),
-        )
-
-        self.num_full_heads = num_full_heads
-        self.num_full_layers = num_full_layers
-        self.dtype = dtype
-        self.device = device
-
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
-
-        progress_bar = trange(num_iters, desc="[loss: NaN]")
-        for _ in progress_bar:
-            losses = []
-            for i in np.random.permutation(len(draft_reduced_attentions)):
-                x = draft_reduced_attentions[i].to(device, dtype)
-                y = full_reduced_attentions[i].to(device, dtype)
-                y /= y.sum(dim=-1)[..., None]
-                optimizer.zero_grad()
-                loss = F.kl_div(self(x).log(), y, reduction="batchmean")
-                loss.backward()
-                optimizer.step()
-                losses.append(loss.item())
-
-            scheduler.step()
-            progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
-
-        return self

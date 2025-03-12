@@ -12,19 +12,27 @@ from .attention_mapping import AttentionMapping, T
 class LinearAttentionMapping(AttentionMapping):
     w: Optional[Tensor] = None
 
-    def __init__(self, path: Optional[str] = None) -> None:
+    def __init__(
+        self, 
+        path: Optional[str] = None,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        self.dtype = dtype
+        self.device = device
         if path is not None:
             parameters = torch.load(path)
             assert "w" in parameters
-            self.w = parameters["w"]
+            self.w = parameters["w"].to(device, dtype)
 
     def map_single(self, a: Tensor) -> Tensor:
         assert self.w is not None
-        if a.dtype != self.w.dtype:
-            self.w = self.w.to(dtype=a.dtype)
 
-        if a.device != self.w.device:
-            self.w = self.w.to(device=a.device)
+        if a.dtype != self.dtype:
+            a = a.to(dtype=self.dtype)
+
+        if a.device != self.device:
+            a = a.to(device=self.device)
 
         return torch.einsum("lbht,hlHL->LbHt", a, self.w)
 
@@ -45,8 +53,6 @@ class KLDivAttentionMapping(LinearAttentionMapping):
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
         num_iters: int = 10,
-        dtype: torch.dtype = torch.float32,
-        device: torch.device | str = "cpu",
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -63,19 +69,19 @@ class KLDivAttentionMapping(LinearAttentionMapping):
             num_draft_heads * num_draft_layers,
             num_full_heads * num_full_layers,
             requires_grad=True,
-            dtype=dtype,
-            device=device,
+            dtype=self.dtype,
+            device=self.device,
         )
 
         optimizer = torch.optim.Adam([unnormalized_w], lr=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
 
-        progress_bar = trange(num_iters, desc="[loss: NaN]")
+        progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             losses = []
             for i in np.random.permutation(len(draft_reduced_attentions)):
-                x = draft_reduced_attentions[i].to(device, dtype)
-                y = full_reduced_attentions[i].to(device, dtype)
+                x = draft_reduced_attentions[i].to(self.device, self.dtype)
+                y = full_reduced_attentions[i].to(self.device, self.dtype)
                 optimizer.zero_grad()
                 self.w = unnormalized_w.softmax(dim=0).view(w_shape)
                 loss = F.kl_div(self(x).log(), y, reduction="batchmean")
@@ -86,7 +92,7 @@ class KLDivAttentionMapping(LinearAttentionMapping):
             scheduler.step()
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
 
-        self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach().cpu()
+        self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach()
         return self
 
 
@@ -96,8 +102,6 @@ class MSEAttentionMapping(LinearAttentionMapping):
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
         num_iters: int = 10,
-        dtype: torch.dtype = torch.float32,
-        device: torch.device | str = "cpu",
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -110,19 +114,19 @@ class MSEAttentionMapping(LinearAttentionMapping):
             num_full_heads,
             num_full_layers,
             requires_grad=True,
-            dtype=dtype,
-            device=device,
+            dtype=self.dtype,
+            device=self.device,
         )
 
         optimizer = torch.optim.Adam([self.w], lr=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
 
-        progress_bar = trange(num_iters, desc="[loss: NaN]")
+        progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             losses = []
             for i in np.random.permutation(len(draft_reduced_attentions)):
-                x = draft_reduced_attentions[i].to(device, dtype)
-                y = full_reduced_attentions[i].to(device, dtype)
+                x = draft_reduced_attentions[i].to(self.device, self.dtype)
+                y = full_reduced_attentions[i].to(self.device, self.dtype)
                 optimizer.zero_grad()
                 loss = F.mse_loss(self(x), y)
                 loss.backward()
@@ -132,7 +136,7 @@ class MSEAttentionMapping(LinearAttentionMapping):
             scheduler.step()
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4e}]")
 
-        self.w = self.w.cpu().detach()
+        self.w = self.w.detach()
         return self
 
 
