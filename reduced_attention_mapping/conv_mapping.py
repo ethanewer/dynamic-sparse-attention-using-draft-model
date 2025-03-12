@@ -10,14 +10,14 @@ from .attention_mapping import AttentionMapping, T
 
 
 class ConvAttentionMapping(AttentionMapping):
-    model: Optional[nn.Sequential] = None
+    model: Optional[nn.Module] = None
     num_draft_layers: Optional[int] = None
     num_draft_heads: Optional[int] = None
     num_full_layers: Optional[int] = None
     num_full_heads: Optional[int] = None
 
     def __init__(
-        self, 
+        self,
         path: Optional[str] = None,
         num_hidden_layers: int = 4,
         num_hidden_channels: int = 512,
@@ -33,7 +33,7 @@ class ConvAttentionMapping(AttentionMapping):
         if path is not None:
             self.model = torch.load(path, weights_only=False).to(device, dtype)
 
-    def init_model(self) -> None:
+    def init_model(self) -> nn.Module:
         assert (
             self.num_draft_layers is not None
             and self.num_draft_heads is not None
@@ -72,7 +72,7 @@ class ConvAttentionMapping(AttentionMapping):
                 )
             )
             layers.append(nn.GELU())
-        
+
         layers.append(
             nn.Conv1d(
                 in_channels=self.num_hidden_channels,
@@ -86,8 +86,8 @@ class ConvAttentionMapping(AttentionMapping):
             )
         )
         layers.append(nn.Softmax(dim=-1))
-        self.model = nn.Sequential(*layers)
-       
+        return nn.Sequential(*layers)
+
     def fit(
         self,
         draft_reduced_attentions: list[Tensor],
@@ -102,7 +102,7 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_full_layers = full_reduced_attentions[0].shape[0]
         self.num_full_heads = full_reduced_attentions[0].shape[2]
 
-        self.init_model()
+        self.model = self.init_model()
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
@@ -124,7 +124,10 @@ class ConvAttentionMapping(AttentionMapping):
             scheduler.step()
             train_loss = sum(train_losses) / len(train_losses)
 
-            if test_draft_reduced_attentions is not None and test_full_reduced_attentions is not None:
+            if (
+                test_draft_reduced_attentions is not None
+                and test_full_reduced_attentions is not None
+            ):
                 test_losses = []
                 for i in range(len(test_draft_reduced_attentions)):
                     x = test_draft_reduced_attentions[i].to(self.device, self.dtype)
@@ -147,7 +150,6 @@ class ConvAttentionMapping(AttentionMapping):
             p.requires_grad = False
 
         return self
-
 
     def stack(self, a: Tensor) -> Tensor:
         num_layers, batch_size, num_heads, seq_len = a.shape
@@ -179,7 +181,7 @@ class ConvAttentionMapping(AttentionMapping):
         a /= a.sum(dim=-1)[..., None]
 
         return self.unstack(self.model(self.stack(a)))
-    
+
     def __call__(self, draft_reduced_attentions: T) -> T:
         if isinstance(draft_reduced_attentions, list):
             return [self.map_single(a) for a in draft_reduced_attentions]
