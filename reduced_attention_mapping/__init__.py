@@ -1,5 +1,5 @@
 from .linear_attention_mapping import LinearAttentionMapping, GreedyAttentionMapping, KLDivAttentionMapping, MSEAttentionMapping
-from .conv_mapping import LinearConvMapping, NonlinearConvMapping
+from .conv_mapping import ConvAttentionMapping
 from .util import topk_overlap
 
 __all__ = [
@@ -8,6 +8,5 @@ __all__ = [
     "MSEAttentionMapping",
     "KLDivAttentionMapping",
     "topk_overlap",
-    "LinearConvMapping",
-    "NonlinearConvMapping",
+    "ConvAttentionMapping",
 ]
