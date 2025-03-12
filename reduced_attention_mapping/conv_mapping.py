@@ -31,7 +31,7 @@ class ConvAttentionMapping(AttentionMapping):
         self.dtype = dtype
         self.device = device
         if path is not None:
-            parameters = torch.load(path, weights_only=False)
+            parameters = torch.load(path, weights_only=False, map_location=device)
             self.model = parameters["model"].to(device, dtype)
             self.num_draft_layers = parameters["num_draft_layers"]
             self.num_draft_heads = parameters["num_draft_heads"]
@@ -196,9 +196,9 @@ class ConvAttentionMapping(AttentionMapping):
     def save(self, path: str) -> None:
         assert (
             self.model is not None
-            and self.num_draft_layers is not None 
+            and self.num_draft_layers is not None
             and self.num_draft_heads is not None
-            and self.num_full_layers is not None 
+            and self.num_full_layers is not None
             and self.num_full_heads is not None
         )
         torch.save(
@@ -208,6 +208,6 @@ class ConvAttentionMapping(AttentionMapping):
                 "num_draft_heads": self.num_draft_heads,
                 "num_full_layers": self.num_full_layers,
                 "num_full_heads": self.num_full_heads,
-            }, 
+            },
             path,
         )

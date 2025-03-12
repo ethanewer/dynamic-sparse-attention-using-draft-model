@@ -21,7 +21,7 @@ class LinearAttentionMapping(AttentionMapping):
         self.dtype = dtype
         self.device = device
         if path is not None:
-            parameters = torch.load(path)
+            parameters = torch.load(path, weights_only=False, map_location=device)
             assert "w" in parameters
             self.w = parameters["w"].to(device, dtype)
 
@@ -185,5 +185,7 @@ class GreedyAttentionMapping(LinearAttentionMapping):
 
                 k_max, l_max = torch.unravel_index(scores.argmax(), scores.shape)
                 self.w[k_max, l_max, i, j] = 1
+
+        self.w = self.w.to(self.device, self.dtype)
 
         return self
