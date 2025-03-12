@@ -8,7 +8,7 @@ from transformers import (  # type: ignore
     LlamaForCausalLM,
 )
 
-from reduced_attention_mapping import KLDivAttentionMapping
+from reduced_attention_mapping import LinearAttentionMapping
 from snapkv import lookahead_snapkv_generate
 
 if torch.cuda.is_available():
@@ -29,7 +29,7 @@ full_model: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
     device_map=device,
 )
 
-attention_mapping = KLDivAttentionMapping(
+attention_mapping = LinearAttentionMapping(
     "reduced_attention_mapping/kl-div-qwen-0.5b-to-3b.pt"
 )
 

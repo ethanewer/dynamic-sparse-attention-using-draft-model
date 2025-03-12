@@ -13,7 +13,7 @@ from dynamic_attention_sinks import (
     dynamic_attention_sinks_generate_v3,
     generate_reduced_attentions,
 )
-from reduced_attention_mapping import KLDivAttentionMapping
+from reduced_attention_mapping import LinearAttentionMapping
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -33,7 +33,7 @@ full_model: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
     device_map=device,
 )
 
-attention_mapping = KLDivAttentionMapping(
+attention_mapping = LinearAttentionMapping(
     "reduced_attention_mapping/kl-div-qwen-0.5b-to-3b.pt"
 )
 

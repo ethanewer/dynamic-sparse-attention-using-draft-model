@@ -9,7 +9,7 @@ from tqdm.notebook import trange  # type: ignore
 from .attention_mapping import AttentionMapping, T
 
 
-class LinearAttentionMapping(AttentionMapping):
+class BaseLinearAttentionMapping(AttentionMapping):
     w: Optional[Tensor] = None
 
     def __init__(
@@ -47,12 +47,13 @@ class LinearAttentionMapping(AttentionMapping):
         torch.save({"w": self.w}, path)
 
 
-class KLDivAttentionMapping(LinearAttentionMapping):
+class LinearAttentionMapping(BaseLinearAttentionMapping):
     def fit(
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
         num_iters: int = 10,
+        lr: float = 1e-3,
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -73,7 +74,7 @@ class KLDivAttentionMapping(LinearAttentionMapping):
             device=self.device,
         )
 
-        optimizer = torch.optim.Adam([unnormalized_w], lr=0.01)
+        optimizer = torch.optim.Adam([unnormalized_w], lr=lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
 
         progress_bar = trange(num_iters, desc="[]")
@@ -96,51 +97,28 @@ class KLDivAttentionMapping(LinearAttentionMapping):
         return self
 
 
-class MSEAttentionMapping(LinearAttentionMapping):
+class AverageAttentionMapping(BaseLinearAttentionMapping):
     def fit(
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
-        num_iters: int = 10,
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
         num_full_layers = full_reduced_attentions[0].shape[0]
         num_full_heads = full_reduced_attentions[0].shape[2]
 
-        self.w = torch.zeros(
-            num_draft_heads,
-            num_draft_layers,
-            num_full_heads,
-            num_full_layers,
-            requires_grad=True,
+        self.w = torch.full(
+            (num_draft_heads, num_draft_layers, num_full_heads, num_full_layers),
+            fill_value=1 / (num_draft_heads * num_draft_layers),
             dtype=self.dtype,
             device=self.device,
         )
 
-        optimizer = torch.optim.Adam([self.w], lr=0.01)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
-
-        progress_bar = trange(num_iters, desc="[]")
-        for _ in progress_bar:
-            losses = []
-            for i in np.random.permutation(len(draft_reduced_attentions)):
-                x = draft_reduced_attentions[i].to(self.device, self.dtype)
-                y = full_reduced_attentions[i].to(self.device, self.dtype)
-                optimizer.zero_grad()
-                loss = F.mse_loss(self(x), y)
-                loss.backward()
-                optimizer.step()
-                losses.append(loss.item())
-
-            scheduler.step()
-            progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4e}]")
-
-        self.w = self.w.detach()
         return self
 
 
-class GreedyAttentionMapping(LinearAttentionMapping):
+class GreedyAttentionMapping(BaseLinearAttentionMapping):
     @staticmethod
     def seperate_batch(reduced_attentions: list[Tensor]) -> list[Tensor]:
         seperated_reduced_attentions = []
@@ -162,30 +140,27 @@ class GreedyAttentionMapping(LinearAttentionMapping):
         num_full_heads = full_reduced_attentions[0].shape[2]
 
         draft_topks = [
-            a.topk(int(r * a.shape[-1])).indices
+            a.topk(int(r * a.shape[-1])).indices.numpy()
             for a in self.seperate_batch(draft_reduced_attentions)
         ]
         full_topks = [
-            a.topk(int(r * a.shape[-1])).indices
+            a.topk(int(r * a.shape[-1])).indices.numpy()
             for a in self.seperate_batch(full_reduced_attentions)
         ]
 
-        self.w = torch.zeros(
-            num_draft_heads,
-            num_draft_layers,
-            num_full_heads,
-            num_full_layers,
+        w = np.zeros(
+            (num_draft_heads, num_draft_layers, num_full_heads, num_full_layers)
         )
 
         for i in trange(num_full_heads):
             for j in range(num_full_layers):
-                scores = torch.zeros(num_draft_heads, num_draft_layers)
+                scores = np.zeros((num_draft_heads, num_draft_layers))
                 for x, y in zip(draft_topks, full_topks):
-                    scores += torch.isin(x, y[j, i]).float().sum(dim=2).T
+                    scores += np.isin(x, y[j, i]).sum(axis=2).T
 
-                k_max, l_max = torch.unravel_index(scores.argmax(), scores.shape)
-                self.w[k_max, l_max, i, j] = 1
+                k_max, l_max = np.unravel_index(scores.argmax(), scores.shape)
+                w[k_max, l_max, i, j] = 1
 
-        self.w = self.w.to(self.device, self.dtype)
+        self.w = torch.tensor(w, dtype=self.dtype, device=self.device)
 
         return self
