@@ -13,7 +13,7 @@ class LinearAttentionMapping(AttentionMapping):
     w: Optional[Tensor] = None
 
     def __init__(
-        self, 
+        self,
         path: Optional[str] = None,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
