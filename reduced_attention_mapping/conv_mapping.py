@@ -1,3 +1,4 @@
+from math import isfinite
 from typing import Optional, Self
 
 import numpy as np
@@ -21,7 +22,7 @@ class ConvAttentionMapping(AttentionMapping):
         path: Optional[str] = None,
         num_hidden_layers: int = 4,
         num_hidden_channels: int = 512,
-        kernel_size: int = 5,
+        kernel_size: int = 7,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
     ) -> None:
@@ -109,7 +110,7 @@ class ConvAttentionMapping(AttentionMapping):
 
         self.model = self.init_model()
 
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
         min_test_loss = float("inf")
 
@@ -122,9 +123,10 @@ class ConvAttentionMapping(AttentionMapping):
                 y /= y.sum(dim=-1)[..., None]
                 optimizer.zero_grad()
                 loss = F.kl_div(self(x).log(), y, reduction="batchmean")
-                loss.backward()
-                optimizer.step()
-                train_losses.append(loss.item())
+                if torch.isfinite(loss):
+                    loss.backward()
+                    optimizer.step()
+                    train_losses.append(loss.item())
 
             scheduler.step()
             train_loss = sum(train_losses) / len(train_losses)
