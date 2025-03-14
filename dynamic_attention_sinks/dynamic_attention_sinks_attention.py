@@ -7,7 +7,7 @@ from torch.types import Device
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
-USE_PARALLEL_ATTENTION = True
+USE_PARALLEL_ATTENTION = False
 
 
 def repeat_kv(hidden_states: Tensor, num_repeats: int) -> Tensor:
@@ -257,7 +257,7 @@ def das_attention_sequential_forward(
     attn_output = (
         attn_output[:, :, :, :]
         .view(*attn_output.shape[:2], -1, attn_output.shape[-1])
-        .transpose(1, 2)[:, :, :origional_seq_len]
+        .transpose(1, 2)[:, :origional_seq_len]
         .contiguous()
     )
 
