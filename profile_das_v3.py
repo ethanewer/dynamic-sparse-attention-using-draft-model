@@ -3,7 +3,7 @@ from collections import defaultdict
 import json
 import torch
 from torch import Tensor
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM  # type: ignore
 
 from dynamic_attention_sinks import dynamic_attention_sinks_generate_v3
 
@@ -15,6 +15,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     device_map=device,
 )
+
 
 def clear_cache():
     gc.collect()

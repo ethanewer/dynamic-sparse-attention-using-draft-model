@@ -3,7 +3,7 @@ from collections import defaultdict
 import json
 import torch
 from torch import Tensor
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM  # type: ignore
 
 from snapkv import snapkv_generate
 
@@ -16,6 +16,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     device_map=device,
 )
+
 
 def clear_cache():
     gc.collect()
@@ -81,4 +82,3 @@ for input_size in range(2048, 50000, 2048):
 
 with open("snapkv-memory-benchmark.json", "w") as f:
     json.dump(results, f)
-
