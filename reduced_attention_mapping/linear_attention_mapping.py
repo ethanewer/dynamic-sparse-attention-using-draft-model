@@ -86,9 +86,10 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
                 optimizer.zero_grad()
                 self.w = unnormalized_w.softmax(dim=0).view(w_shape)
                 loss = F.kl_div(self(x).log(), y, reduction="batchmean")
-                loss.backward()
-                optimizer.step()
-                losses.append(loss.item())
+                if torch.isfinite(loss):
+                    loss.backward()
+                    optimizer.step()
+                    losses.append(loss.item())
 
             scheduler.step()
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
