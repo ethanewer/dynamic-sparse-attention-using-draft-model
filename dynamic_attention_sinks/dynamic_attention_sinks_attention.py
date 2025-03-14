@@ -257,7 +257,7 @@ def das_attention_sequential_forward(
     attn_output = (
         attn_output[:, :, :, :]
         .view(*attn_output.shape[:2], -1, attn_output.shape[-1])
-        .transpose(1, 2)[:, :, :origional_seq_len]
+        .transpose(1, 2)[:, :origional_seq_len]
         .contiguous()
     )
 
