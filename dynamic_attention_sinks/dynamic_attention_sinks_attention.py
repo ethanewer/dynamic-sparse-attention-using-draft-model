@@ -8,30 +8,6 @@ from transformers.models.llama.modeling_llama import LlamaAttention  # type: ign
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
 
-def repeat_kv(hidden_states: Tensor, num_repeats: int) -> Tensor:
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if num_repeats == 1:
-        return hidden_states
-    else:
-        return (
-            hidden_states[:, :, None, :, :]
-            .expand(
-                batch,
-                num_key_value_heads,
-                num_repeats,
-                slen,
-                head_dim,
-            )
-            .reshape(
-                batch,
-                num_key_value_heads * num_repeats,
-                slen,
-                head_dim,
-            )
-            .contiguous()
-        )
-
-
 def stack_block_along_batch(block: Tensor, num_key_value_groups: int = 1) -> Tensor:
     batch_size, num_heads, num_blocks, block_size, head_dim = block.shape
     if num_key_value_groups == 1:
