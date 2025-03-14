@@ -7,32 +7,6 @@ from torch.types import Device
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
-USE_PARALLEL_ATTENTION = False
-
-
-def repeat_kv(hidden_states: Tensor, num_repeats: int) -> Tensor:
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if num_repeats == 1:
-        return hidden_states
-    else:
-        return (
-            hidden_states[:, :, None, :, :]
-            .expand(
-                batch,
-                num_key_value_heads,
-                num_repeats,
-                slen,
-                head_dim,
-            )
-            .reshape(
-                batch,
-                num_key_value_heads * num_repeats,
-                slen,
-                head_dim,
-            )
-            .contiguous()
-        )
-
 
 def stack_block_along_batch(block: Tensor, num_key_value_groups: int = 1) -> Tensor:
     batch_size, num_heads, num_blocks, block_size, head_dim = block.shape
@@ -199,71 +173,6 @@ def das_attention_parallel_forward(
     return attn_output, None
 
 
-def das_attention_sequential_forward(
-    module: LlamaAttention | Qwen2Attention,
-    query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    attention_mask: Tensor,
-    block_size: int,
-    indices: Tensor,
-    origional_seq_len: int,
-    dropout: float = 0.0,
-    scaling: Optional[float] = None,
-) -> tuple[Tensor, None]:
-    num_blocks = query.shape[2] // block_size
-
-    if hasattr(module, "num_key_value_groups"):
-        num_key_value_groups = module.num_key_value_groups
-    else:
-        num_key_value_groups = 1
-
-    query = query.view(
-        query.shape[0],
-        query.shape[1],
-        num_blocks,
-        block_size,
-        query.shape[3],
-    )
-
-    attn_output = torch.empty(
-        *query.shape[:4],
-        value.shape[-1],
-        device=query.device,
-        dtype=query.dtype,
-    )
-
-    expanded_indices = indices[..., None].expand(-1, -1, -1, -1, key.shape[3])
-
-    for i in range(num_blocks):
-        block_query = query[:, :, i]
-        block_key = repeat_kv(
-            key.gather(dim=2, index=expanded_indices[:, :, i]),
-            num_repeats=num_key_value_groups,
-        )
-        block_value = repeat_kv(
-            value.gather(dim=2, index=expanded_indices[:, :, i]),
-            num_repeats=num_key_value_groups,
-        )
-        attn_output[:, :, i] = F.scaled_dot_product_attention(
-            block_query,
-            block_key,
-            block_value,
-            attn_mask=attention_mask[[i]],
-            dropout_p=dropout,
-            scale=scaling,
-        )
-
-    attn_output = (
-        attn_output[:, :, :, :]
-        .view(*attn_output.shape[:2], -1, attn_output.shape[-1])
-        .transpose(1, 2)[:, :origional_seq_len]
-        .contiguous()
-    )
-
-    return attn_output, None
-
-
 gpu_ok = False
 if torch.cuda.is_available():
     device_cap = torch.cuda.get_device_capability()
@@ -271,27 +180,11 @@ if torch.cuda.is_available():
         gpu_ok = True
 
 
-if USE_PARALLEL_ATTENTION:
-    if gpu_ok:
-        print(
-            "Using compiled parallel dynamic attention sinks attention implementation."
-        )
-        dynamic_attention_sinks_attention_forward = torch.compile(
-            das_attention_parallel_forward
-        )
-    else:
-        print("Using eager parallel dynamic attention sinks attention implementation.")
-        dynamic_attention_sinks_attention_forward = das_attention_parallel_forward
+if gpu_ok:
+    print("Using compiled dynamic attention sinks attention implementation.")
+    dynamic_attention_sinks_attention_forward = torch.compile(
+        das_attention_parallel_forward
+    )
 else:
-    if gpu_ok:
-        print(
-            "Using compiled sequential dynamic attention sinks attention implementation."
-        )
-        dynamic_attention_sinks_attention_forward = torch.compile(
-            das_attention_sequential_forward
-        )
-    else:
-        print(
-            "Using eager sequential dynamic attention sinks attention implementation."
-        )
-        dynamic_attention_sinks_attention_forward = das_attention_sequential_forward
+    print("Using eager dynamic attention sinks attention implementation.")
+    dynamic_attention_sinks_attention_forward = das_attention_parallel_forward
