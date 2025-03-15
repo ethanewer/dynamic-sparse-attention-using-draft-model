@@ -13,10 +13,12 @@ from .generation import (
 from .llama_util import (
     reset_llama_model,
     update_llama_model_for_dynamic_attention_sinks,
+    update_llama_model_to_output_unnormalized_attentions,
 )
 from .qwen2_util import (
     reset_qwen2_model,
     update_qwen2_model_for_dynamic_attention_sinks,
+    update_qwen2_model_to_output_unnormalized_attentions,
 )
 from .token_dropping_cache import TokenDroppingCache
 
@@ -31,7 +33,9 @@ __all__ = [
     "dynamic_attention_sinks_generate_v3",
     "generate_reduced_attentions",
     "update_llama_model_for_dynamic_attention_sinks",
+    "update_llama_model_to_output_unnormalized_attentions",
     "reset_llama_model",
     "update_qwen2_model_for_dynamic_attention_sinks",
+    "update_qwen2_model_to_output_unnormalized_attentions",
     "reset_qwen2_model",
 ]
