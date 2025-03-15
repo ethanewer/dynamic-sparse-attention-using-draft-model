@@ -1,4 +1,3 @@
-from math import isfinite
 from typing import Optional, Self
 
 import numpy as np
