@@ -37,7 +37,7 @@ def pool_reduced_attentions(
 def topk_overlap(
     pred_reduced_attentions: Tensor | list[Tensor],
     true_reduced_attentions: Tensor | list[Tensor],
-    pooling: Literal["avg", "max"] = "avg",
+    pooling: Literal["mean", "max"] = "mean",
     kernel_size: int = 1,
     r: float = 0.125,
 ) -> float:

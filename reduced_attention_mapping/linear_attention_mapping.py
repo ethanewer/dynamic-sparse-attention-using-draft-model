@@ -1,4 +1,4 @@
-from typing import Optional, Self
+from typing import Optional, Self, Literal
 
 import numpy as np
 import torch
@@ -86,10 +86,10 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
             for i in permutation:
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
-                optimizer.zero_grad()
                 self.w = unnormalized_w.softmax(dim=0).view(w_shape)
                 loss = F.kl_div(self(x).log(), y, reduction="batchmean")
                 if torch.isfinite(loss):
+                    optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     losses.append(loss.item())
@@ -98,6 +98,67 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
 
         self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach()
+        return self
+    
+
+class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
+    def fit(
+        self,
+        draft_reduced_attentions: list[Tensor],
+        full_reduced_attentions: list[Tensor],
+        num_iters: int = 10,
+        objective: Literal["mse", "kl_div"] = "kl_div",
+        lr: float = 1e-3,
+        lr_decay: float = 1.0,
+    ) -> Self:
+        num_draft_layers = draft_reduced_attentions[0].shape[0]
+        num_draft_heads = draft_reduced_attentions[0].shape[2]
+        num_full_layers = full_reduced_attentions[0].shape[0]
+        num_full_heads = full_reduced_attentions[0].shape[2]
+
+        self.w = torch.zeros(
+            num_draft_heads,
+            num_draft_layers,
+            num_full_heads,
+            num_full_layers,
+            requires_grad=True,
+            dtype=self.dtype,
+            device=self.device,
+        )
+
+        optimizer = torch.optim.Adam([self.w], lr=lr)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters, lr * lr_decay)
+
+        progress_bar = trange(num_iters, desc="[]")
+        for _ in progress_bar:
+            losses = []
+            permutation: list[int] = np.random.permutation(
+                len(draft_reduced_attentions)
+            ).tolist()
+            for i in permutation:
+                x = draft_reduced_attentions[i].to(self.device, self.dtype)
+                y = full_reduced_attentions[i].to(self.device, self.dtype)
+
+                if objective == "mse":
+                    loss = F.mse_loss(self(x), y)
+                elif objective == "kl_div":
+                    loss = F.kl_div(
+                        self(x).log_softmax(dim=-1),
+                        y.log_softmax(dim=-1),
+                        reduction="batchmean",
+                        log_target=True,
+                    )
+
+                if torch.isfinite(loss):
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    losses.append(loss.item())
+
+            scheduler.step()
+            progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
+
+        self.w.requires_grad = False
         return self
 
 
