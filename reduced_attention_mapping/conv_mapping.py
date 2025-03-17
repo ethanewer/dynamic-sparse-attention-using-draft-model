@@ -3,7 +3,7 @@ from typing import Optional, Self
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import Tensor, nn
+from torch import Tensor, is_vulkan_available, nn
 from tqdm.notebook import trange  # type: ignore
 
 from .attention_mapping import AttentionMapping, T
@@ -23,6 +23,7 @@ class ConvAttentionMapping(AttentionMapping):
         num_hidden_channels: int = 512,
         kernel_size: int = 7,
         dilation: int = 1,
+        normalized_reduced_attentions: bool = True,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
     ) -> None:
@@ -30,6 +31,7 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_hidden_channels = num_hidden_channels
         self.kernel_size = kernel_size
         self.dilation = dilation
+        self.normalized_reduced_attentions = normalized_reduced_attentions
         self.dtype = dtype
         self.device = device
         if path is not None:
@@ -104,7 +106,8 @@ class ConvAttentionMapping(AttentionMapping):
         test_draft_reduced_attentions: Optional[list[Tensor]] = None,
         test_full_reduced_attentions: Optional[list[Tensor]] = None,
         num_iters: int = 10,
-        lr: float = 5e-4,
+        lr: float = 0.001,
+        lr_decay: float = 1.0,
     ) -> Self:
         self.num_draft_layers = draft_reduced_attentions[0].shape[0]
         self.num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -113,8 +116,12 @@ class ConvAttentionMapping(AttentionMapping):
 
         self.model = self.init_model()
 
+        if torch.cuda.is_available():
+            self.model.compile()
+
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters, lr * lr_decay)
         min_test_loss = float("inf")
 
         progress_bar = trange(num_iters, desc="[]")
@@ -126,10 +133,17 @@ class ConvAttentionMapping(AttentionMapping):
             for i in permutation:
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
-                y /= y.sum(dim=-1)[..., None]
-                optimizer.zero_grad()
-                loss = F.kl_div(self(x).log_softmax(dim=-1), y, reduction="batchmean")
+
+                if self.normalized_reduced_attentions:
+                    y = (y / y.sum(dim=-1)[..., None]).log()
+                else:
+                    y = y.log_softmax()
+
+                y_pred = self(x).log_softmax(dim=-1)
+
+                loss = F.kl_div(y_pred, y, reduction="batchmean", log_target=True)
                 if torch.isfinite(loss):
+                    optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     train_losses.append(loss.item())
@@ -145,14 +159,16 @@ class ConvAttentionMapping(AttentionMapping):
                 for i in range(len(test_draft_reduced_attentions)):
                     x = test_draft_reduced_attentions[i].to(self.device, self.dtype)
                     y = test_full_reduced_attentions[i].to(self.device, self.dtype)
-                    y /= y.sum(dim=-1)[..., None]
-                    with torch.no_grad():
-                        loss = F.kl_div(
-                            self(x).log_softmax(dim=-1),
-                            y,
-                            reduction="batchmean",
-                        )
+                    
+                    if self.normalized_reduced_attentions:
+                        y = (y / y.sum(dim=-1)[..., None]).log()
+                    else:
+                        y = y.log_softmax()
 
+                    with torch.no_grad():
+                        y_pred = self(x).log_softmax(dim=-1)
+                    
+                    loss = F.kl_div(y_pred, y, reduction="batchmean", log_target=True)
                     if torch.isfinite(loss):
                         test_losses.append(loss.item())
 
@@ -184,19 +200,16 @@ class ConvAttentionMapping(AttentionMapping):
         ).transpose(0, 1)
 
     def map_single(self, a: Tensor) -> Tensor:
-        assert (
-            self.model is not None
-            and self.dtype is not None
-            and self.device is not None
-        )
+        assert self.model is not None
 
         if a.dtype != self.dtype:
             a = a.to(dtype=self.dtype)
 
         if a.device != self.device:
             a = a.to(device=self.device)
-
-        a /= a.sum(dim=-1)[..., None]
+        
+        if self.normalized_reduced_attentions:
+            a /= a.sum(dim=-1)[..., None]
 
         return self.unstack(self.model(self.stack(a)))
 

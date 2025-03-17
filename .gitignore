@@ -5,4 +5,5 @@ mmlu_val_1.json
 __pycache__*
 synthetic*
 reduced_attentions*
+unnormalized_reduced_attentions*
 .vscode
