@@ -22,12 +22,14 @@ class ConvAttentionMapping(AttentionMapping):
         num_hidden_layers: int = 4,
         num_hidden_channels: int = 512,
         kernel_size: int = 7,
+        dilation: int = 1,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
     ) -> None:
         self.num_hidden_layers = num_hidden_layers
         self.num_hidden_channels = num_hidden_channels
         self.kernel_size = kernel_size
+        self.dilation = dilation
         self.dtype = dtype
         self.device = device
         if path is not None:
@@ -54,6 +56,7 @@ class ConvAttentionMapping(AttentionMapping):
                 in_channels=num_draft_channels,
                 out_channels=self.num_hidden_channels,
                 kernel_size=self.kernel_size,
+                dilation=self.dilation,
                 stride=1,
                 padding="same",
                 padding_mode="replicate",
@@ -69,6 +72,7 @@ class ConvAttentionMapping(AttentionMapping):
                     in_channels=self.num_hidden_channels,
                     out_channels=self.num_hidden_channels,
                     kernel_size=self.kernel_size,
+                    dilation=self.dilation,
                     stride=1,
                     padding="same",
                     padding_mode="replicate",
@@ -83,6 +87,7 @@ class ConvAttentionMapping(AttentionMapping):
                 in_channels=self.num_hidden_channels,
                 out_channels=num_full_channels,
                 kernel_size=self.kernel_size,
+                dilation=self.dilation,
                 stride=1,
                 padding="same",
                 padding_mode="replicate",
@@ -90,7 +95,6 @@ class ConvAttentionMapping(AttentionMapping):
                 dtype=self.dtype,
             )
         )
-        layers.append(nn.Softmax(dim=-1))
         return nn.Sequential(*layers)
 
     def fit(
@@ -116,12 +120,15 @@ class ConvAttentionMapping(AttentionMapping):
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             train_losses = []
-            for i in np.random.permutation(len(draft_reduced_attentions)):
+            permutation: list[int] = np.random.permutation(
+                len(draft_reduced_attentions)
+            ).tolist()
+            for i in permutation:
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
                 y /= y.sum(dim=-1)[..., None]
                 optimizer.zero_grad()
-                loss = F.kl_div(self(x).log(), y, reduction="batchmean")
+                loss = F.kl_div(self(x).log_softmax(dim=-1), y, reduction="batchmean")
                 if torch.isfinite(loss):
                     loss.backward()
                     optimizer.step()
@@ -140,9 +147,14 @@ class ConvAttentionMapping(AttentionMapping):
                     y = test_full_reduced_attentions[i].to(self.device, self.dtype)
                     y /= y.sum(dim=-1)[..., None]
                     with torch.no_grad():
-                        loss = F.kl_div(self(x).log(), y, reduction="batchmean")
+                        loss = F.kl_div(
+                            self(x).log_softmax(dim=-1),
+                            y,
+                            reduction="batchmean",
+                        )
 
-                    test_losses.append(loss.item())
+                    if torch.isfinite(loss):
+                        test_losses.append(loss.item())
 
                 test_loss = sum(test_losses) / len(test_losses)
                 min_test_loss = min(min_test_loss, test_loss)

@@ -5,7 +5,6 @@ from .linear_attention_mapping import (
     GreedyAttentionMapping,
     LinearAttentionMapping,
 )
-from .transformer_mapping import TransformerAttentionMapping
 from .util import topk_overlap
 
 __all__ = [
@@ -14,6 +13,5 @@ __all__ = [
     "GreedyAttentionMapping",
     "AverageAttentionMapping",
     "ConvAttentionMapping",
-    "TransformerAttentionMapping",
     "topk_overlap",
 ]
