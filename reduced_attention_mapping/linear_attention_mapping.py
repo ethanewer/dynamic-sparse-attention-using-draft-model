@@ -80,7 +80,10 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             losses = []
-            for i in np.random.permutation(len(draft_reduced_attentions)):
+            permutation: list[int] = np.random.permutation(
+                len(draft_reduced_attentions)
+            ).tolist()
+            for i in permutation:
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
                 optimizer.zero_grad()

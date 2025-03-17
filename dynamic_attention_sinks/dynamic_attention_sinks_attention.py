@@ -173,14 +173,7 @@ def das_attention_parallel_forward(
     return attn_output, None
 
 
-gpu_ok = False
 if torch.cuda.is_available():
-    device_cap = torch.cuda.get_device_capability()
-    if device_cap in ((7, 0), (8, 0), (9, 0)):
-        gpu_ok = True
-
-
-if gpu_ok:
     print("Using compiled dynamic attention sinks attention implementation.")
     dynamic_attention_sinks_attention_forward = torch.compile(
         das_attention_parallel_forward
