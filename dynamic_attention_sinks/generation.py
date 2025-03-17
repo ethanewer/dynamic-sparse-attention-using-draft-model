@@ -10,8 +10,14 @@ from transformers import (  # type: ignore
 )
 
 from .indices_util import get_cache_update_indices, get_indices_and_attention_mask
-from .llama_util import update_llama_model_for_dynamic_attention_sinks
-from .qwen2_util import update_qwen2_model_for_dynamic_attention_sinks
+from .llama_util import (
+    update_llama_model_for_dynamic_attention_sinks,
+    update_llama_model_to_output_unnormalized_attentions,
+)
+from .qwen2_util import (
+    update_qwen2_model_for_dynamic_attention_sinks,
+    update_qwen2_model_to_output_unnormalized_attentions,
+)
 from .token_dropping_cache import TokenDroppingCache
 
 
@@ -63,8 +69,17 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     reduction: Literal["mean", "squared_sum", "max"],
+    output_unnormalized_attentions: bool = False,
     generation_kwargs: dict[str, Any] = {},
 ) -> tuple[Tensor, Tensor]:
+    if output_unnormalized_attentions:
+        if isinstance(model, LlamaForCausalLM):
+            update_llama_model_to_output_unnormalized_attentions(model)
+        elif isinstance(model, Qwen2ForCausalLM):
+            update_qwen2_model_to_output_unnormalized_attentions(model)
+        else:
+            raise NotImplementedError()
+
     past_key_values = DynamicCache()
 
     with torch.no_grad():
