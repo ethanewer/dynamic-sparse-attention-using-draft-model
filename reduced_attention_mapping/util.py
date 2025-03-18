@@ -9,7 +9,7 @@ from torch.func import vmap  # type: ignore
 
 def pool_reduced_attentions(
     reduced_attentions: Tensor,
-    pooling: Literal["avg", "max"] = "avg",
+    pooling: Literal["mean", "max"] = "mean",
     kernel_size: int = 5,
 ) -> Tensor:
     assert kernel_size % 2 == 1

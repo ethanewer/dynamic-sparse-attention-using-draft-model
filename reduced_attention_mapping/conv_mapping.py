@@ -1,9 +1,9 @@
-from typing import Optional, Self
+from typing import Optional, Self, Literal
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import Tensor, is_vulkan_available, nn
+from torch import Tensor, nn
 from tqdm.notebook import trange  # type: ignore
 
 from .attention_mapping import AttentionMapping, T
@@ -99,15 +99,36 @@ class ConvAttentionMapping(AttentionMapping):
         )
         return nn.Sequential(*layers)
 
+    def loss_fn(
+        self,
+        output: Tensor,
+        target: Tensor,
+        objective: Literal["mse", "kl_div"],
+    ) -> Tensor:
+        if objective == "mse":
+            return F.mse_loss(output, target)
+        elif objective == "kl_div":
+            if self.normalized_reduced_attentions:
+                target = (target / target.sum(dim=-1)[..., None]).log()
+            else:
+                target = target.log_softmax(dim=-1)
+
+            output = output.log_softmax(dim=-1)
+            return F.kl_div(output, target, reduction="batchmean", log_target=True)
+        else:
+            raise NotImplementedError
+
     def fit(
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
         test_draft_reduced_attentions: Optional[list[Tensor]] = None,
         test_full_reduced_attentions: Optional[list[Tensor]] = None,
+        objective: Literal["mse", "kl_div"] = "mse",
         num_iters: int = 10,
         lr: float = 0.001,
         lr_decay: float = 1.0,
+        weight_decay: float = 0.01,
     ) -> Self:
         self.num_draft_layers = draft_reduced_attentions[0].shape[0]
         self.num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -115,15 +136,20 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_full_heads = full_reduced_attentions[0].shape[2]
 
         self.model = self.init_model()
-
         if torch.cuda.is_available():
             self.model.compile()
 
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
-
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters, lr * lr_decay)
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            num_iters,
+            lr * lr_decay,
+        )
         min_test_loss = float("inf")
-
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             train_losses = []
@@ -133,15 +159,7 @@ class ConvAttentionMapping(AttentionMapping):
             for i in permutation:
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
-
-                if self.normalized_reduced_attentions:
-                    y = (y / y.sum(dim=-1)[..., None]).log()
-                else:
-                    y = y.log_softmax()
-
-                y_pred = self(x).log_softmax(dim=-1)
-
-                loss = F.kl_div(y_pred, y, reduction="batchmean", log_target=True)
+                loss = self.loss_fn(self(x), y, objective)
                 if torch.isfinite(loss):
                     optimizer.zero_grad()
                     loss.backward()
@@ -159,16 +177,9 @@ class ConvAttentionMapping(AttentionMapping):
                 for i in range(len(test_draft_reduced_attentions)):
                     x = test_draft_reduced_attentions[i].to(self.device, self.dtype)
                     y = test_full_reduced_attentions[i].to(self.device, self.dtype)
-                    
-                    if self.normalized_reduced_attentions:
-                        y = (y / y.sum(dim=-1)[..., None]).log()
-                    else:
-                        y = y.log_softmax()
-
                     with torch.no_grad():
-                        y_pred = self(x).log_softmax(dim=-1)
-                    
-                    loss = F.kl_div(y_pred, y, reduction="batchmean", log_target=True)
+                        loss = self.loss_fn(self(x), y, objective)
+
                     if torch.isfinite(loss):
                         test_losses.append(loss.item())
 
@@ -207,7 +218,7 @@ class ConvAttentionMapping(AttentionMapping):
 
         if a.device != self.device:
             a = a.to(device=self.device)
-        
+
         if self.normalized_reduced_attentions:
             a /= a.sum(dim=-1)[..., None]
 

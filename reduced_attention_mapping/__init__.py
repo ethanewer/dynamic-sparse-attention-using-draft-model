@@ -4,12 +4,14 @@ from .linear_attention_mapping import (
     AverageAttentionMapping,
     GreedyAttentionMapping,
     LinearAttentionMapping,
+    UnnormalizedLinearAttentionMapping,
 )
 from .util import topk_overlap
 
 __all__ = [
     "AttentionMapping",
     "LinearAttentionMapping",
+    "UnnormalizedLinearAttentionMapping",
     "GreedyAttentionMapping",
     "AverageAttentionMapping",
     "ConvAttentionMapping",

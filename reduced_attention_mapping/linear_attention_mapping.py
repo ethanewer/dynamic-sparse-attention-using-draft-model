@@ -54,6 +54,7 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
         full_reduced_attentions: list[Tensor],
         num_iters: int = 10,
         lr: float = 1e-3,
+        lr_decay: float = 1.0,
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -75,8 +76,11 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
         )
 
         optimizer = torch.optim.Adam([unnormalized_w], lr=lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters)
-
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            num_iters,
+            lr * lr_decay,
+        )
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             losses = []
@@ -99,18 +103,51 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
 
         self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach()
         return self
-    
+
 
 class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
-    def fit(
+    def fit_lstsq(
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
-        num_iters: int = 10,
-        objective: Literal["mse", "kl_div"] = "kl_div",
-        lr: float = 1e-3,
-        lr_decay: float = 1.0,
-    ) -> Self:
+        weight_decay: float,
+    ) -> None:
+        num_draft_layers = draft_reduced_attentions[0].shape[0]
+        num_draft_heads = draft_reduced_attentions[0].shape[2]
+        num_full_layers = full_reduced_attentions[0].shape[0]
+        num_full_heads = full_reduced_attentions[0].shape[2]
+
+        m = num_draft_layers * num_draft_heads
+        n = num_full_layers * num_full_heads
+
+        a = torch.zeros(m, m, dtype=self.dtype, device=self.device)
+        b = torch.zeros(m, n, dtype=self.dtype, device=self.device)
+
+        for x, y in zip(draft_reduced_attentions, full_reduced_attentions):
+            x = x.transpose(0, 3).reshape(-1, m).to(self.device, self.dtype)
+            y = y.transpose(0, 3).reshape(-1, n).to(self.device, self.dtype)
+            a += x.T @ x / x.shape[0] ** 2
+            b += x.T @ y / x.shape[0] ** 2
+
+        if weight_decay != 0:
+            a += weight_decay * torch.eye(m, dtype=self.dtype, device=self.device)
+
+        self.w = torch.linalg.solve(a, b).view(
+            num_draft_heads,
+            num_draft_layers,
+            num_full_heads,
+            num_full_layers,
+        )
+
+    def fit_kl_div_adam(
+        self,
+        draft_reduced_attentions: list[Tensor],
+        full_reduced_attentions: list[Tensor],
+        num_iters: int,
+        lr: float,
+        lr_decay: float,
+        weight_decay: float,
+    ) -> None:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
         num_full_layers = full_reduced_attentions[0].shape[0]
@@ -126,9 +163,12 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
             device=self.device,
         )
 
-        optimizer = torch.optim.Adam([self.w], lr=lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iters, lr * lr_decay)
-
+        optimizer = torch.optim.Adam([self.w], lr=lr, weight_decay=weight_decay)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            num_iters,
+            lr * lr_decay,
+        )
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
             losses = []
@@ -139,15 +179,12 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
                 x = draft_reduced_attentions[i].to(self.device, self.dtype)
                 y = full_reduced_attentions[i].to(self.device, self.dtype)
 
-                if objective == "mse":
-                    loss = F.mse_loss(self(x), y)
-                elif objective == "kl_div":
-                    loss = F.kl_div(
-                        self(x).log_softmax(dim=-1),
-                        y.log_softmax(dim=-1),
-                        reduction="batchmean",
-                        log_target=True,
-                    )
+                loss = F.kl_div(
+                    self(x).log_softmax(dim=-1),
+                    y.log_softmax(dim=-1),
+                    reduction="batchmean",
+                    log_target=True,
+                )
 
                 if torch.isfinite(loss):
                     optimizer.zero_grad()
@@ -159,6 +196,35 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
             progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
 
         self.w.requires_grad = False
+
+    def fit(
+        self,
+        draft_reduced_attentions: list[Tensor],
+        full_reduced_attentions: list[Tensor],
+        objective: Literal["mse", "kl_div"] = "mse",
+        num_iters: int = 10,
+        lr: float = 1e-3,
+        lr_decay: float = 1.0,
+        weight_decay: float = 0.0,
+    ) -> Self:
+        if objective == "mse":
+            self.fit_lstsq(
+                draft_reduced_attentions,
+                full_reduced_attentions,
+                weight_decay=weight_decay,
+            )
+        elif objective == "kl_div":
+            self.fit_kl_div_adam(
+                draft_reduced_attentions,
+                full_reduced_attentions,
+                num_iters=num_iters,
+                lr=lr,
+                lr_decay=lr_decay,
+                weight_decay=weight_decay,
+            )
+        else:
+            raise NotImplementedError
+
         return self
 
 
