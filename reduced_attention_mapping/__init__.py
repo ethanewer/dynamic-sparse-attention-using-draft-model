@@ -6,7 +6,7 @@ from .linear_attention_mapping import (
     LinearAttentionMapping,
     UnnormalizedLinearAttentionMapping,
 )
-from .util import topk_overlap, pool_reduced_attentions
+from .util import pool_reduced_attentions, topk_overlap
 
 __all__ = [
     "AttentionMapping",

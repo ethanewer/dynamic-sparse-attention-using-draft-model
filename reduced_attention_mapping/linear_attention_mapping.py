@@ -1,4 +1,4 @@
-from typing import Optional, Self, Literal
+from typing import Literal, Optional, Self
 
 import numpy as np
 import torch

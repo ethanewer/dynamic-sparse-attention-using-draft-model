@@ -1,8 +1,8 @@
 import warnings
 from typing import Literal
-import torch.nn.functional as F
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from torch.func import vmap  # type: ignore
 
