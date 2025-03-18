@@ -126,8 +126,8 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
         for x, y in zip(draft_reduced_attentions, full_reduced_attentions):
             x = x.transpose(0, 3).reshape(-1, m).to(self.device, self.dtype)
             y = y.transpose(0, 3).reshape(-1, n).to(self.device, self.dtype)
-            a += x.T @ x / x.shape[0] ** 2
-            b += x.T @ y / x.shape[0] ** 2
+            a += x.T @ x / (x.shape[0] ** 2)
+            b += x.T @ y / (x.shape[0] ** 2)
 
         if weight_decay != 0:
             a += weight_decay * torch.eye(m, dtype=self.dtype, device=self.device)
@@ -163,7 +163,7 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
             device=self.device,
         )
 
-        optimizer = torch.optim.Adam([self.w], lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.AdamW([self.w], lr=lr, weight_decay=weight_decay)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             num_iters,
