@@ -6,7 +6,7 @@ from .linear_attention_mapping import (
     LinearAttentionMapping,
     UnnormalizedLinearAttentionMapping,
 )
-from .util import topk_overlap
+from .util import topk_overlap, pool_reduced_attentions
 
 __all__ = [
     "AttentionMapping",
@@ -16,4 +16,5 @@ __all__ = [
     "AverageAttentionMapping",
     "ConvAttentionMapping",
     "topk_overlap",
+    "pool_reduced_attentions",
 ]
