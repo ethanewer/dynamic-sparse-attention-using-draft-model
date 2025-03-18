@@ -26,7 +26,7 @@ class LinearConvAttentionMapping(AttentionMapping):
             parameters = torch.load(path, weights_only=False, map_location=device)
             if old_path:
                 assert "kernel" in parameters and "kernel_size" in parameters
-                kernel = parameters["kernel"].to(device, dtype)
+                kernel: Tensor = parameters["kernel"].to(device, dtype)
                 self.kernel_size: int = parameters["kernel_size"]
                 weight = kernel.permute(3, 2, 1, 0, 4).reshape(
                     kernel.shape[3] * kernel.shape[2],
