@@ -28,11 +28,8 @@ class BaseLinearAttentionMapping(AttentionMapping):
     def map_single(self, a: Tensor) -> Tensor:
         assert self.w is not None
 
-        if a.dtype != self.dtype:
-            a = a.to(dtype=self.dtype)
-
-        if a.device != self.device:
-            a = a.to(device=self.device)
+        if a.device != self.device or a.dtype != self.dtype:
+            a = a.to(self.device, self.dtype)
 
         return torch.einsum("lbht,hlHL->LbHt", a, self.w)
 
@@ -136,7 +133,9 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
         if weight_decay != 0:
             a += weight_decay * torch.eye(m + 1, dtype=self.dtype, device=self.device)
 
-        self.w = torch.linalg.solve(a, b)[:-1].view(
+        affine_w: Tensor = torch.linalg.solve(a, b)
+
+        self.w = affine_w[:-1].reshape(
             num_draft_heads,
             num_draft_layers,
             num_full_heads,

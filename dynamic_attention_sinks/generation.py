@@ -69,7 +69,7 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     reduction: Literal["mean", "squared_sum", "max"],
-    output_unnormalized_attentions: bool = False,
+    output_unnormalized_attentions: bool,
     generation_kwargs: dict[str, Any] = {},
 ) -> tuple[Tensor, Tensor]:
     if output_unnormalized_attentions:

@@ -1,11 +1,12 @@
 from .attention_mapping import AttentionMapping
 from .conv_mapping import ConvAttentionMapping
-from .linear_attention_mapping import (
+from .linear_mapping import (
     AverageAttentionMapping,
     GreedyAttentionMapping,
     LinearAttentionMapping,
     UnnormalizedLinearAttentionMapping,
 )
+from .linear_conv_mapping import LinearConvAttentionMapping
 from .util import pool_reduced_attentions, topk_overlap
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "GreedyAttentionMapping",
     "AverageAttentionMapping",
     "ConvAttentionMapping",
+    "LinearConvAttentionMapping",
     "topk_overlap",
     "pool_reduced_attentions",
 ]
