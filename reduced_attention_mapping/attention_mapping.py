@@ -22,4 +22,3 @@ class AttentionMapping(ABC):
 
     @abstractmethod
     def save(self, path: str) -> None: ...
-    
