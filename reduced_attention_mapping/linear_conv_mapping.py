@@ -17,7 +17,6 @@ class LinearConvAttentionMapping(AttentionMapping):
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
     ) -> None:
-        self.kernel_size = kernel_size
         self.dtype = dtype
         self.device = device
         if path is not None:
