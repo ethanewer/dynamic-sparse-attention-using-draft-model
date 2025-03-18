@@ -120,19 +120,23 @@ class UnnormalizedLinearAttentionMapping(BaseLinearAttentionMapping):
         m = num_draft_layers * num_draft_heads
         n = num_full_layers * num_full_heads
 
-        a = torch.zeros(m, m, dtype=self.dtype, device=self.device)
-        b = torch.zeros(m, n, dtype=self.dtype, device=self.device)
+        a = torch.zeros(m + 1, m + 1, dtype=self.dtype, device=self.device)
+        b = torch.zeros(m + 1, n, dtype=self.dtype, device=self.device)
 
         for x, y in zip(draft_reduced_attentions, full_reduced_attentions):
-            x = x.transpose(0, 3).reshape(-1, m).to(self.device, self.dtype)
+            x = F.pad(
+                x.transpose(0, 3).reshape(-1, m),
+                pad=(0, 1),
+                value=1,
+            ).to(self.device, self.dtype)
             y = y.transpose(0, 3).reshape(-1, n).to(self.device, self.dtype)
             a += x.T @ x / (x.shape[0] ** 2)
             b += x.T @ y / (x.shape[0] ** 2)
 
         if weight_decay != 0:
-            a += weight_decay * torch.eye(m, dtype=self.dtype, device=self.device)
+            a += weight_decay * torch.eye(m + 1, dtype=self.dtype, device=self.device)
 
-        self.w = torch.linalg.solve(a, b).view(
+        self.w = torch.linalg.solve(a, b)[:-1].view(
             num_draft_heads,
             num_draft_layers,
             num_full_heads,
