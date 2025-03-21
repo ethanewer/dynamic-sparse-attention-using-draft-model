@@ -125,17 +125,24 @@ class ConvAttentionMapping(AttentionMapping):
         test_draft_reduced_attentions: Optional[list[Tensor]] = None,
         test_full_reduced_attentions: Optional[list[Tensor]] = None,
         objective: Literal["mse", "kl_div"] = "mse",
-        num_iters: int = 10,
-        lr: float = 0.001,
-        lr_decay: float = 1.0,
+        num_iters: int = 128,
+        lr: float = 1e-4,
+        lr_decay: float = 0.1,
         weight_decay: float = 0.01,
+        resume: bool = False,
     ) -> Self:
         self.num_draft_layers = draft_reduced_attentions[0].shape[0]
         self.num_draft_heads = draft_reduced_attentions[0].shape[2]
         self.num_full_layers = full_reduced_attentions[0].shape[0]
         self.num_full_heads = full_reduced_attentions[0].shape[2]
 
-        self.model = self.init_model()
+        if resume:
+            assert self.model is not None
+            for p in self.model.parameters():
+                p.requires_grad = True
+        else:
+            self.model = self.init_model()
+
         if torch.cuda.is_available():
             self.model.compile()
 

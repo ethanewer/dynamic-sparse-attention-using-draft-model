@@ -5,8 +5,8 @@ from .linear_mapping import (
     GreedyAttentionMapping,
     LinearAttentionMapping,
     UnnormalizedLinearAttentionMapping,
+    LinearConvAttentionMapping,
 )
-from .linear_conv_mapping import LinearConvAttentionMapping
 from .util import pool_reduced_attentions, topk_overlap
 
 __all__ = [
