@@ -214,7 +214,7 @@ class LinearConvAttentionMapping(AttentionMapping):
         a = F.pad(a, (pad, pad, 0, 0), mode="replicate")
         a = a.unfold(dimension=-1, size=self.kernel_size, step=1)
         a = a.transpose(0, 3).reshape(a.shape[3] * a.shape[1], -1)
-        a = F.pad(a, pad=(0, 1), value=torch.e if self.log_inputs else 1)
+        a = F.pad(a, pad=(0, 1), value=torch.e)
         return a.contiguous()
 
     def fit_lstsq(
