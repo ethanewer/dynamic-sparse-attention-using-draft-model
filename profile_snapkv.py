@@ -1,6 +1,7 @@
 import gc
-from collections import defaultdict
 import json
+from collections import defaultdict
+
 import torch
 from torch import Tensor
 from transformers import AutoModelForCausalLM  # type: ignore
@@ -12,7 +13,8 @@ device = "cuda"
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-0.5B-Instruct",
+    "meta-llama/Llama-3.2-1B-Instruct",
+    attn_implementation="flash_attention_2",
     torch_dtype=torch.bfloat16,
     device_map=device,
 )
@@ -45,7 +47,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 50000, 2048):
+for input_size in range(2048, 32769, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     attention_mask = torch.ones_like(input_ids)
 

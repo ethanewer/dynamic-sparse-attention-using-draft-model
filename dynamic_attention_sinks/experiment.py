@@ -6,7 +6,11 @@ from transformers import (  # type: ignore
     Qwen2ForCausalLM,
 )
 
-from .indices_util import get_cache_update_indices, get_indices_and_attention_mask
+from .indices_util import (
+    get_cache_update_indices,
+    get_indices_and_attention_mask,
+    get_indices_and_attention_mask_flash_attn,
+)
 from .llama_util import update_llama_model_for_dynamic_attention_sinks
 from .qwen2_util import update_qwen2_model_for_dynamic_attention_sinks
 from .token_dropping_cache import TokenDroppingCache
@@ -201,9 +205,9 @@ def dynamic_attention_sinks_v2_experiment(
                 past_key_values=past_key_values,
             )
 
-        logits.append(outputs.logits[0, -1:])
+        logits.append(outputs.logits)
 
-    return torch.cat(logits).float().cpu()
+    return torch.cat(logits, dim=1).float().cpu()
 
 
 def dynamic_attention_sinks_v3_experiment(
@@ -224,18 +228,26 @@ def dynamic_attention_sinks_v3_experiment(
     input_len = input_ids.shape[1]
     k = min(k, input_len - block_size)
 
-    indices, attention_mask = get_indices_and_attention_mask(
-        input_ids=input_ids,
-        reduced_attentions=reduced_attentions,
-        k=k,
-        block_size=block_size,
-        dtype=model.dtype,
-    )
+    if model.config._attn_implementation == "flash_attention_2":
+        indices, attention_mask = get_indices_and_attention_mask_flash_attn(
+            input_ids=input_ids,
+            reduced_attentions=reduced_attentions,
+            k=k,
+            block_size=block_size,
+        )
+    else:
+        indices, attention_mask = get_indices_and_attention_mask(
+            input_ids=input_ids,
+            reduced_attentions=reduced_attentions,
+            k=k,
+            block_size=block_size,
+            dtype=model.dtype,
+        )
 
     past_key_values = DynamicCache()
 
     with torch.no_grad():
-        _ = model(
+        outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             use_cache=True,
@@ -259,6 +271,6 @@ def dynamic_attention_sinks_v3_experiment(
                 past_key_values=past_key_values,
             )
 
-        logits.append(outputs.logits[0, -1:])
+        logits.append(outputs.logits)
 
-    return torch.cat(logits).float().cpu()
+    return torch.cat(logits, dim=1).float().cpu()
