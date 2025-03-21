@@ -9,6 +9,7 @@ from transformers.modeling_flash_attention_utils import (  # type: ignore
 )
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
+from einops import rearrange
 
 
 def stack_block_along_batch(block: Tensor, num_key_value_groups: int = 1) -> Tensor:
@@ -176,7 +177,7 @@ def das_attention_spda_forward(
     return attn_output, None
 
 
-def das_attention_flash_attn_forward(
+def dynamic_attention_sinks_flash_attn_forward(
     module: LlamaAttention | Qwen2Attention,
     query: Tensor,
     key: Tensor,
@@ -190,12 +191,14 @@ def das_attention_flash_attn_forward(
 ) -> tuple[Tensor, None]:
     batch_size = query.shape[0]
 
-    query = query.view(
-        query.shape[0],
-        query.shape[1],
-        query.shape[2] // block_size,
-        block_size,
-        query.shape[3],
+    query = rearrange(
+        query,
+        "b h (m n) d -> (b m) n h d",
+        b=query.shape[0],
+        h=query.shape[1],
+        m=query.shape[2] // block_size,
+        n=block_size,
+        d=query.shape[3],
     )
 
     expanded_indices = indices.view(
@@ -205,55 +208,55 @@ def das_attention_flash_attn_forward(
         1,
     ).expand(-1, -1, -1, key.shape[3])
 
-    key = key.gather(
-        dim=2,
-        index=expanded_indices,
-    ).view(
-        key.shape[0],
-        key.shape[1],
-        indices.shape[2],
-        indices.shape[3],
-        key.shape[3],
+    key = rearrange(
+        key.gather(dim=2, index=expanded_indices),
+        "b h (m n) d -> (b m) n h d",
+        b=key.shape[0],
+        h=key.shape[1],
+        m=indices.shape[2],
+        n=indices.shape[3],
+        d=key.shape[3],
     )
 
-    value = value.gather(
-        dim=2,
-        index=expanded_indices,
-    ).view(
-        value.shape[0],
-        value.shape[1],
-        indices.shape[2],
-        indices.shape[3],
-        value.shape[3],
+    value = rearrange(
+        value.gather(dim=2, index=expanded_indices),
+        "b h (m n) d -> (b m) n h d",
+        b=value.shape[0],
+        h=value.shape[1],
+        m=indices.shape[2],
+        n=indices.shape[3],
+        d=value.shape[3],
     )
 
     del indices, expanded_indices
 
-    query = stack_block_along_batch(query)
-    key = stack_block_along_batch(key)
-    value = stack_block_along_batch(value)
-
-    attn_output = _flash_attention_forward(
-        query.transpose(1, 2),
-        key.transpose(1, 2),
-        value.transpose(1, 2),
+    attn_output: Tensor = _flash_attention_forward(
+        query,
+        key,
+        value,
         attention_mask=attention_mask,
-        query_length=query.shape[2],
+        query_length=query.shape[1],
         is_causal=True,
         dropout_p=dropout,
         scale=scaling,
-    ).transpose(1, 2)
+    )
 
-    attn_output = unstack_attn(attn_output, batch_size, origional_seq_len)
+    attn_output = rearrange(
+        attn_output,
+        "(b m) n h d -> b (m n) h d",
+        b=batch_size,
+        m=attn_output.shape[0] // batch_size,
+        n=attn_output.shape[1],
+        h=attn_output.shape[2],
+        d=attn_output.shape[3],
+    )[:, :origional_seq_len]
 
     return attn_output, None
 
 
 if torch.cuda.is_available():
-    print("Using compiled dynamic attention sinks attention implementation.")
+    print("Using compiled dynamic attention sinks sdpa implementation.")
     dynamic_attention_sinks_spda_forward = torch.compile(das_attention_spda_forward)
-    dynamic_attention_sinks_flash_attn_forward = das_attention_flash_attn_forward
 else:
-    print("Using eager dynamic attention sinks attention implementation.")
+    print("Using eager dynamic attention sinks spda implementation.")
     dynamic_attention_sinks_spda_forward = das_attention_spda_forward
-    dynamic_attention_sinks_flash_attn_forward = das_attention_flash_attn_forward
