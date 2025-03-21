@@ -32,7 +32,7 @@ class BaseLinearAttentionMapping(AttentionMapping):
         if a.device != self.device or a.dtype != self.dtype:
             a = a.to(self.device, self.dtype)
 
-        return einsum(a, self.w, "l1 b h1 t, h1 l1 h2 l2 -> l2 b h2 t")
+        return einsum(a, self.w, "l1 b h1 t, l1 h1 l2 h2 -> l2 b h2 t")
 
     def __call__(self, draft_reduced_attentions: T) -> T:
         if isinstance(draft_reduced_attentions, list):
