@@ -9,7 +9,11 @@ from transformers import (  # type: ignore
     Qwen2ForCausalLM,
 )
 
-from .indices_util import get_cache_update_indices, get_indices_and_attention_mask
+from .indices_util import (
+    get_cache_update_indices,
+    get_indices_and_attention_mask,
+    get_indices_and_attention_mask_flash_attn,
+)
 from .llama_util import (
     update_llama_model_for_dynamic_attention_sinks,
     update_llama_model_to_output_unnormalized_attentions,
@@ -319,6 +323,67 @@ def dynamic_attention_sinks_generate_v3(
         k=k,
         block_size=block_size,
         dtype=model.dtype,
+    )
+
+    if past_key_values is None:
+        past_key_values = DynamicCache()
+
+    cache_position = torch.arange(prefill_input_len, device=input_ids.device)
+
+    with torch.no_grad():
+        _ = model(
+            input_ids=input_ids[:, :-1],
+            attention_mask=attention_mask,
+            use_cache=True,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            dynamic_attention_sinks_block_size=block_size,
+            dynamic_attention_sinks_indices=indices,
+        )
+
+    cache_size = past_key_values.get_seq_length()
+    assert cache_size == min(block_size + k, prefill_input_len)
+
+    generated_ids: Tensor = model.generate(  # type: ignore
+        input_ids=input_ids[:, -cache_size - 1 :],
+        attention_mask=torch.ones_like(input_ids),
+        use_cache=True,
+        past_key_values=past_key_values,
+        **generation_kwargs,
+    )
+
+    return torch.cat((input_ids[:, : -cache_size - 1], generated_ids), dim=1)
+
+
+def dynamic_attention_sinks_generate_flash_attn(
+    model: LlamaForCausalLM | Qwen2ForCausalLM,
+    input_ids: Tensor,
+    reduced_attentions: Tensor,
+    block_size: int,
+    k: int,
+    past_key_values: Optional[Cache] = None,
+    update_model: bool = True,
+    generation_kwargs: dict[str, Any] = {},
+) -> Tensor:
+    if update_model:
+        if isinstance(model, LlamaForCausalLM):
+            update_llama_model_for_dynamic_attention_sinks(model)
+        elif isinstance(model, Qwen2ForCausalLM):
+            update_qwen2_model_for_dynamic_attention_sinks(model)
+        else:
+            raise NotImplementedError()
+
+    assert model.config._attn_implementation == "flash_attention_2"
+
+    prefill_input_len = input_ids.shape[1] - 1
+
+    k = min(k, prefill_input_len - block_size)
+
+    indices, attention_mask = get_indices_and_attention_mask_flash_attn(
+        input_ids=input_ids[:, :-1],
+        reduced_attentions=reduced_attentions[..., :-1],
+        k=k,
+        block_size=block_size,
     )
 
     if past_key_values is None:

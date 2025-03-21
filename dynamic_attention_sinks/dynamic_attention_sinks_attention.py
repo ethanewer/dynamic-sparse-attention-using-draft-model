@@ -4,6 +4,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, dtype
 from torch.types import Device
+from transformers.modeling_flash_attention_utils import (  # type: ignore
+    _flash_attention_forward,
+)
 from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
 
@@ -97,7 +100,7 @@ def make_causal_mask(
     return causal_mask
 
 
-def das_attention_parallel_forward(
+def das_attention_spda_forward(
     module: LlamaAttention | Qwen2Attention,
     query: Tensor,
     key: Tensor,
@@ -173,11 +176,86 @@ def das_attention_parallel_forward(
     return attn_output, None
 
 
+def das_attention_flash_attn_forward(
+    module: LlamaAttention | Qwen2Attention,
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    attention_mask: Tensor,
+    block_size: int,
+    indices: Tensor,
+    origional_seq_len: int,
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+) -> tuple[Tensor, None]:
+    batch_size = query.shape[0]
+
+    query = query.view(
+        query.shape[0],
+        query.shape[1],
+        query.shape[2] // block_size,
+        block_size,
+        query.shape[3],
+    )
+
+    expanded_indices = indices.view(
+        indices.shape[0],
+        indices.shape[1],
+        -1,
+        1,
+    ).expand(-1, -1, -1, key.shape[3])
+
+    key = key.gather(
+        dim=2,
+        index=expanded_indices,
+    ).view(
+        key.shape[0],
+        key.shape[1],
+        indices.shape[2],
+        indices.shape[3],
+        key.shape[3],
+    )
+
+    value = value.gather(
+        dim=2,
+        index=expanded_indices,
+    ).view(
+        value.shape[0],
+        value.shape[1],
+        indices.shape[2],
+        indices.shape[3],
+        value.shape[3],
+    )
+
+    del indices, expanded_indices
+
+    query = stack_block_along_batch(query)
+    key = stack_block_along_batch(key)
+    value = stack_block_along_batch(value)
+
+    attn_output = _flash_attention_forward(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        attention_mask=attention_mask,
+        query_length=query.shape[2],
+        is_causal=True,
+        dropout_p=dropout,
+        scale=scaling,
+    ).transpose(1, 2)
+
+    attn_output = unstack_attn(attn_output, batch_size, origional_seq_len)
+
+    return attn_output, None
+
+
 if torch.cuda.is_available():
     print("Using compiled dynamic attention sinks attention implementation.")
-    dynamic_attention_sinks_attention_forward = torch.compile(
-        das_attention_parallel_forward
+    dynamic_attention_sinks_spda_forward = torch.compile(das_attention_spda_forward)
+    dynamic_attention_sinks_flash_attn_forward = torch.compile(
+        das_attention_flash_attn_forward
     )
 else:
     print("Using eager dynamic attention sinks attention implementation.")
-    dynamic_attention_sinks_attention_forward = das_attention_parallel_forward
+    dynamic_attention_sinks_spda_forward = das_attention_spda_forward
+    dynamic_attention_sinks_flash_attn_forward = das_attention_flash_attn_forward

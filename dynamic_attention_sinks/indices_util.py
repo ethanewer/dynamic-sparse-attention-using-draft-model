@@ -3,7 +3,9 @@ import torch
 from numba import njit  # type: ignore
 from torch import Tensor, dtype
 
-from .dynamic_attention_sinks_attention import make_causal_mask
+from .dynamic_attention_sinks_attention import (
+    make_causal_mask,
+)
 
 
 @njit
@@ -36,10 +38,16 @@ def get_indices_np(
         kv_block_end = min(seq_len, (block_idx + 1) * block_size)
         kv_block_size = kv_block_end - kv_block_start
 
-        indices[..., block_idx, k : k + kv_block_size] = np.arange(
-            kv_block_start,
-            kv_block_end,
-        )
+        if block_idx < (seq_len + block_size - 1) // block_size:
+            indices[..., block_idx, -kv_block_size:] = np.arange(
+                kv_block_start,
+                kv_block_end,
+            )
+        else:
+            indices[..., block_idx, k : k + block_size] = np.arange(
+                kv_block_start,
+                kv_block_end,
+            )
 
         if block_idx > 1:
             block_start = min(block_idx * block_size, seq_len)
@@ -97,6 +105,32 @@ def get_indices_and_attention_mask(
     )
 
     return indices.clamp_max_(seq_len - 1), attention_mask
+
+
+def get_indices_and_attention_mask_flash_attn(
+    input_ids: Tensor,
+    reduced_attentions: Tensor,
+    k: int,
+    block_size: int,
+) -> tuple[Tensor, Tensor]:
+    num_hidden_layers, batch_size, num_key_value_heads, seq_len = (
+        reduced_attentions.shape
+    )
+
+    indices = torch.tensor(
+        get_indices_np(
+            sorted_indices=reduced_attentions.argsort(dim=-1, descending=True).numpy(),
+            k=k,
+            block_size=block_size,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            num_hidden_layers=num_hidden_layers,
+            num_key_value_heads=num_key_value_heads,
+        ),
+        device=input_ids.device,
+    )
+
+    return indices.clamp_max(seq_len - 1), indices[0, 0, 0, :-1] < seq_len
 
 
 @njit

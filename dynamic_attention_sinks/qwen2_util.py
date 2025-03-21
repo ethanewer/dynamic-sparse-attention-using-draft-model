@@ -12,7 +12,8 @@ from transformers.models.qwen2.modeling_qwen2 import (  # type: ignore
 )
 
 from .dynamic_attention_sinks_attention import (
-    dynamic_attention_sinks_attention_forward,
+    dynamic_attention_sinks_flash_attn_forward,
+    dynamic_attention_sinks_spda_forward,
 )
 from .eager_attention_output_unnormalized import (
     eager_attention_output_unnormalized_forward,
@@ -20,7 +21,7 @@ from .eager_attention_output_unnormalized import (
 
 
 class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
-    def forward(
+    def forward(  # type: ignore
         self,
         hidden_states: Tensor,
         position_embeddings: tuple[Tensor, Tensor],
@@ -49,7 +50,6 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
                 or past_key_value.get_seq_length(self.layer_idx) == 0
             )
         ):
-            assert self.config._attn_implementation == "sdpa"
             assert not kwargs.get("output_attentions", False)
             assert attention_mask is not None
 
@@ -89,18 +89,32 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
             if pad > 0:
                 query_states = torch.nn.functional.pad(query_states, (0, 0, 0, pad))
 
-            attn_output, attn_weights = dynamic_attention_sinks_attention_forward(
-                self,
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                block_size=block_size,
-                indices=indices[:, :, :-1],
-                origional_seq_len=seq_len,
-                dropout=0.0 if not self.training else self.attention_dropout,
-                scaling=self.scaling,
-            )
+            if self.config._attn_implementation == "flash_attention_2":
+                attn_output, attn_weights = dynamic_attention_sinks_flash_attn_forward(
+                    self,
+                    query_states,
+                    key_states,
+                    value_states,
+                    attention_mask,
+                    block_size=block_size,
+                    indices=indices[:, :, :-1],
+                    origional_seq_len=seq_len,
+                    dropout=0.0 if not self.training else self.attention_dropout,
+                    scaling=self.scaling,
+                )
+            else:
+                attn_output, attn_weights = dynamic_attention_sinks_spda_forward(
+                    self,
+                    query_states,
+                    key_states,
+                    value_states,
+                    attention_mask,
+                    block_size=block_size,
+                    indices=indices[:, :, :-1],
+                    origional_seq_len=seq_len,
+                    dropout=0.0 if not self.training else self.attention_dropout,
+                    scaling=self.scaling,
+                )
         else:
             if past_key_value is not None:
                 # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -156,7 +170,7 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
 
 
 class Qwen2AttentionOutputUnnormalized(Qwen2Attention):
-    def forward(
+    def forward(  # type: ignore
         self,
         hidden_states: Tensor,
         position_embeddings: tuple[Tensor, Tensor],
@@ -197,12 +211,12 @@ class Qwen2AttentionOutputUnnormalized(Qwen2Attention):
             if self.config._attn_implementation == "sdpa" and kwargs.get(
                 "output_attentions", False
             ):
-                logger.warning_once(
+                logger.warning_once(  # type: ignore
                     "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[
+                attention_interface = ALL_ATTENTION_FUNCTIONS[  # type: ignore
                     self.config._attn_implementation
                 ]
 
