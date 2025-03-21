@@ -124,7 +124,7 @@ class ConvAttentionMapping(AttentionMapping):
         full_reduced_attentions: list[Tensor],
         test_draft_reduced_attentions: Optional[list[Tensor]] = None,
         test_full_reduced_attentions: Optional[list[Tensor]] = None,
-        objective: Literal["mse", "kl_div"] = "mse",
+        objective: Literal["mse", "kl_div"] = "kl_div",
         num_iters: int = 128,
         lr: float = 1e-4,
         lr_decay: float = 0.1,
