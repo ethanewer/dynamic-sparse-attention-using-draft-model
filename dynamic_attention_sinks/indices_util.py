@@ -38,13 +38,13 @@ def get_indices_np(
         kv_block_end = min(seq_len, (block_idx + 1) * block_size)
         kv_block_size = kv_block_end - kv_block_start
 
-        if block_idx < (seq_len + block_size - 1) // block_size:
+        if block_idx < (seq_len + block_size - 1) // block_size - 1:
             indices[..., block_idx, -kv_block_size:] = np.arange(
                 kv_block_start,
                 kv_block_end,
             )
         else:
-            indices[..., block_idx, k : k + block_size] = np.arange(
+            indices[..., block_idx, k : k + kv_block_size] = np.arange(
                 kv_block_start,
                 kv_block_end,
             )
@@ -130,7 +130,8 @@ def get_indices_and_attention_mask_flash_attn(
         device=input_ids.device,
     )
 
-    return indices.clamp_max(seq_len - 1), indices[0, 0, 0, :-1] < seq_len
+    atttention_mask = (indices[0, 0, 0, :-1] < seq_len).repeat(batch_size, 1)
+    return indices.clamp_max(seq_len - 1), atttention_mask
 
 
 @njit

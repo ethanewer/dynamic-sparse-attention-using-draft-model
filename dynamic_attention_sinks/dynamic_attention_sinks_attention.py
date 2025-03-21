@@ -252,9 +252,7 @@ def das_attention_flash_attn_forward(
 if torch.cuda.is_available():
     print("Using compiled dynamic attention sinks attention implementation.")
     dynamic_attention_sinks_spda_forward = torch.compile(das_attention_spda_forward)
-    dynamic_attention_sinks_flash_attn_forward = torch.compile(
-        das_attention_flash_attn_forward
-    )
+    dynamic_attention_sinks_flash_attn_forward = das_attention_flash_attn_forward
 else:
     print("Using eager dynamic attention sinks attention implementation.")
     dynamic_attention_sinks_spda_forward = das_attention_spda_forward
