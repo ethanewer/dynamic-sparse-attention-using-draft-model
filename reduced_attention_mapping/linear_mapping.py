@@ -50,7 +50,7 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
-        num_iters: int = 16,
+        num_iters: int = 32,
         lr: float = 1e-3,
         lr_decay: float = 0.1,
     ) -> Self:

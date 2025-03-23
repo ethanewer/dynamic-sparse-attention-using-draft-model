@@ -21,7 +21,7 @@ class ConvAttentionMapping(AttentionMapping):
         path: Optional[str] = None,
         num_hidden_layers: int = 4,
         num_hidden_channels: int = 512,
-        kernel_size: int = 7,
+        kernel_size: int = 9,
         dilation: int = 1,
         normalized_reduced_attentions: bool = True,
         dtype: torch.dtype = torch.float32,
@@ -130,6 +130,7 @@ class ConvAttentionMapping(AttentionMapping):
         lr_decay: float = 0.1,
         weight_decay: float = 0.01,
         resume: bool = False,
+        checkpoint_path: Optional[str] = None,
     ) -> Self:
         self.num_draft_layers = draft_reduced_attentions[0].shape[0]
         self.num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -137,25 +138,43 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_full_heads = full_reduced_attentions[0].shape[2]
 
         if resume:
-            assert self.model is not None
+            checkpoint = torch.load(
+                checkpoint_path,
+                weights_only=False,
+                map_location=self.device,
+            )
+            self.model = checkpoint["model"]
+            optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+            )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                num_iters,
+                lr * lr_decay,
+            )
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            scheduler.load_state_dict(checkpoint["scheduler"])
+
             for p in self.model.parameters():
                 p.requires_grad = True
         else:
             self.model = self.init_model()
+            optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+            )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                num_iters,
+                lr * lr_decay,
+            )
 
         if torch.cuda.is_available():
             self.model.compile()
 
-        optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
-        )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            num_iters,
-            lr * lr_decay,
-        )
         min_test_loss = float("inf")
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
@@ -191,6 +210,20 @@ class ConvAttentionMapping(AttentionMapping):
                         test_losses.append(loss.item())
 
                 test_loss = sum(test_losses) / len(test_losses)
+                if test_loss < min_test_loss and checkpoint_path is not None:
+                    torch.save(
+                        {
+                            "model": self.model,
+                            "num_draft_layers": self.num_draft_layers,
+                            "num_draft_heads": self.num_draft_heads,
+                            "num_full_layers": self.num_full_layers,
+                            "num_full_heads": self.num_full_heads,
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict(),
+                        },
+                        checkpoint_path,
+                    )
+
                 min_test_loss = min(min_test_loss, test_loss)
                 progress_bar.set_description(
                     f"[train loss: {train_loss:.4f}, test loss: {test_loss:.4f}, min test loss: {min_test_loss:.4f}]"
