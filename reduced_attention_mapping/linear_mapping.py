@@ -115,7 +115,7 @@ class AverageAttentionMapping(BaseLinearAttentionMapping):
         num_full_heads = full_reduced_attentions[0].shape[2]
 
         self.w = torch.full(
-            (num_draft_heads, num_draft_layers, num_full_heads, num_full_layers),
+            (num_draft_layers, num_draft_heads, num_full_layers, num_full_heads),
             fill_value=1 / (num_draft_heads * num_draft_layers),
             dtype=self.dtype,
             device=self.device,
