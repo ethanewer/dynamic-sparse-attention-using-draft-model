@@ -7,3 +7,4 @@ synthetic*
 reduced_attentions*
 unnormalized_reduced_attentions*
 .vscode
+*reduced_attention_mapping/*/*checkpoint.pt
