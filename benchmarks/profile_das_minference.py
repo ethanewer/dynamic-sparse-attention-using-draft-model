@@ -7,20 +7,20 @@ import torch
 from torch import Tensor
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignore
 
-from snapkv import snapkv_generate
+from das_minference import das_minference_generate
 
 assert torch.cuda.is_available()
 device = "cuda"
 
-
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-7B-Instruct",  # "meta-llama/Llama-3.2-1b-Instruct",
+    "Qwen/Qwen2.5-Coder-14B-Instruct",
+    attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
     ),
-    # torch_dtype=torch.bfloat16,
-    # device_map=device,
 )
 
 
@@ -44,10 +44,17 @@ generation_kwargs = dict(
     pad_token_id=None,
 )
 
-snapkv_generate(
+das_minference_generate(
     model=model,
     input_ids=torch.randint(8192, (1, 2048), device=device),
-    attention_mask=torch.ones(1, 2048, device=device),
+    reduced_attentions=torch.randn(
+        model.config.num_hidden_layers,
+        1,
+        model.config.num_key_value_heads,
+        2048,
+        dtype=torch.bfloat16,
+        device="cuda",
+    ),
     window_size=2048 // 32,
     max_capacity_prompt=2048 // 8,
     generation_kwargs=generation_kwargs,
@@ -60,9 +67,16 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 16384, 2048):
+for input_size in range(2048, 80000, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
-    attention_mask = torch.ones_like(input_ids)
+    reduced_attentions = torch.randn(
+        model.config.num_hidden_layers,
+        1,
+        model.config.num_key_value_heads,
+        input_size,
+        dtype=torch.bfloat16,
+        device="cuda",
+    )
 
     clear_cache()
 
@@ -71,10 +85,10 @@ for input_size in range(2048, 16384, 2048):
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
 
-    snapkv_generate(
+    das_minference_generate(
         model=model,
         input_ids=input_ids,
-        attention_mask=attention_mask,
+        reduced_attentions=reduced_attentions,
         window_size=input_size // 32,
         max_capacity_prompt=input_size // 8,
         generation_kwargs=generation_kwargs,
@@ -100,5 +114,5 @@ for input_size in range(2048, 16384, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("snapkv-memory-benchmark.json", "w") as f:
+with open("das-benchmark.json", "w") as f:
     json.dump(results, f)

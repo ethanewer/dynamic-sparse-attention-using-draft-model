@@ -16,6 +16,7 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generation_kwargs: dict[str, Any] = {},
+    generate_model: LlamaForCausalLM | Qwen2ForCausalLM | None = None,
 ) -> tuple[Tensor, Tensor]:
     past_key_values = DynamicCache()
 
@@ -26,7 +27,10 @@ def generate_reduced_attentions(
             use_cache=True,
         )
 
-    outputs = model.generate(
+    if generate_model is None:
+        generate_model = model
+
+    outputs = generate_model.generate(
         input_ids,
         attention_mask=torch.ones_like(input_ids),
         output_attentions=True,

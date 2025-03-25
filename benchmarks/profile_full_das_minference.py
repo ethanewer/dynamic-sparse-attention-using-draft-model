@@ -4,6 +4,7 @@ import time
 from collections import defaultdict
 
 import torch
+from minference import MInference  # type: ignore
 from torch import Tensor
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignore
 
@@ -13,29 +14,56 @@ from reduced_attention_mapping import AverageAttentionMapping
 assert torch.cuda.is_available()
 device = "cuda"
 
-attention_mapping = AverageAttentionMapping(
-    "reduced_attention_mapping/qwen_coder_mappings/average.pt",
-    device=device,
-)
-
-
 draft_model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-0.5B-Instruct",  # "meta-llama/Llama-3.2-1b-Instruct",
+    "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    attn_implementation="eager",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
     ),
-    # torch_dtype=torch.bfloat16,
-    # device_map=device,
 )
+
+minference_patch = MInference(
+    "minference",
+    "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    "/content/drive/MyDrive/minference-patterns/Qwen2.5-0.5b-random-pattern.json",
+)
+
+draft_model_minference = minference_patch(
+    AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+        attn_implementation="flash_attention_2",
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        ),
+    )
+)
+
 full_model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-7B-Instruct",  # "meta-llama/Llama-3.2-1b-Instruct",
+    "Qwen/Qwen2.5-Coder-14B-Instruct",
+    attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
     ),
-    # torch_dtype=torch.bfloat16,
-    # device_map=device,
+    torch_dtype=torch.bfloat16,
+    device_map=device,
+)
+
+attention_mapping = AverageAttentionMapping(device=device)
+attention_mapping.w = torch.ones(
+    draft_model.config.num_hidden_layers,
+    draft_model.config.num_key_value_heads,
+    full_model.config.num_hidden_layers,
+    full_model.config.num_key_value_heads,
+    device=device,
 )
 
 
@@ -60,17 +88,18 @@ generation_kwargs = dict(
 )
 
 reduced_attentions = generate_reduced_attentions(
-    draft_model,
+    draft_model_minference,
     input_ids=torch.randint(8192, (1, 2048), device=device),
     generation_kwargs=generation_kwargs,
+    generate_model=draft_model,
 )[1]
 
 das_minference_generate(
     model=full_model,
-    input_ids=torch.randint(8192, (1, 2048), device=device),
+    input_ids=torch.randint(8192, (1, 16384), device=device),
     reduced_attentions=attention_mapping(reduced_attentions),
-    window_size=2048 // 32,
-    max_capacity_prompt=2048 // 8,
+    window_size=16384 // 32,
+    max_capacity_prompt=16384 // 8,
     generation_kwargs=generation_kwargs,
 )
 
@@ -81,7 +110,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 16384, 2048):
+for input_size in range(2048, 80000, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
 
     clear_cache()
@@ -92,9 +121,10 @@ for input_size in range(2048, 16384, 2048):
     t0 = time.time()
 
     reduced_attentions = generate_reduced_attentions(
-        draft_model,
+        draft_model_minference,
         input_ids=input_ids,
         generation_kwargs=generation_kwargs,
+        generate_model=draft_model,
     )[1]
 
     das_minference_generate(
@@ -126,5 +156,5 @@ for input_size in range(2048, 16384, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("das-memory-benchmark.json", "w") as f:
+with open("das-full-benchmark.json", "w") as f:
     json.dump(results, f)
