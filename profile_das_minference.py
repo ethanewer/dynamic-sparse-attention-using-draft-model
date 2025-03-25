@@ -1,7 +1,7 @@
 import gc
 import json
-from collections import defaultdict
 import time
+from collections import defaultdict
 
 import torch
 from torch import Tensor
@@ -43,7 +43,7 @@ das_minference_generate(
     model=model,
     input_ids=torch.randint(8192, (1, 2048), device=device),
     reduced_attentions=torch.randn(
-        24,
+        model.config.num_hidden_layers,
         1,
         model.config.num_key_value_heads,
         2048,
@@ -65,7 +65,7 @@ results = defaultdict(list)
 for input_size in range(32768, 32769, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     reduced_attentions = torch.randn(
-        24,
+        model.config.num_hidden_layers,
         1,
         model.config.num_key_value_heads,
         input_size,
@@ -89,12 +89,12 @@ for input_size in range(32768, 32769, 2048):
         generation_kwargs=generation_kwargs,
     )
 
-    print(f"    Time: {time.time() - t0:.4f}s")
-
+    dt = time.time() - t0
     max_memory_allocated = torch.cuda.max_memory_allocated() / 1024**2
     max_memory_reserved = torch.cuda.max_memory_reserved() / 1024**2
     max_memory_allocated_dif = max_memory_allocated - max_memory_allocated_before
     max_memory_reserved_dif = max_memory_reserved - max_memory_reserved_before
+    print(f"    Time: {dt:.4f}s")
     print(f"    Max GPU Memory Allocated: {max_memory_allocated:.2f} MB")
     print(f"    Max GPU Memory Reserved: {max_memory_reserved:.2f} MB")
     print(f"    Max New GPU Memory Allocated: {max_memory_allocated_dif:.2f} MB")
@@ -102,10 +102,12 @@ for input_size in range(32768, 32769, 2048):
 
     clear_cache()
 
+    results["time"].append(dt)
     results["max_memory_allocated"].append(max_memory_allocated)
     results["max_memory_reserved"].append(max_memory_reserved)
     results["max_memory_allocated_dif"].append(max_memory_allocated_dif)
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
+    results["input_size"].append(input_size)
 
 with open("das-memory-benchmark.json", "w") as f:
     json.dump(results, f)

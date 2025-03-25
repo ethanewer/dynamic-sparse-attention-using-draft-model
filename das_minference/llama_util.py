@@ -11,7 +11,7 @@ from transformers.models.llama.modeling_llama import (  # type: ignore
     logger,
 )
 
-from .util import das_minference_attention_forward, compress_states
+from .util import compress_states, das_minference_attention_forward
 
 
 class LlamaAttentionDASMInference(LlamaAttention):

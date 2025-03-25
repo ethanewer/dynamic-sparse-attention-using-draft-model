@@ -1,7 +1,7 @@
 import gc
 import json
-from collections import defaultdict
 import time
+from collections import defaultdict
 
 import torch
 from torch import Tensor
@@ -93,12 +93,12 @@ for input_size in range(2048, 16384, 2048):
 
     clear_cache()
 
-    results["input_size"].append(input_size)
     results["time"].append(dt)
     results["max_memory_allocated"].append(max_memory_allocated)
     results["max_memory_reserved"].append(max_memory_reserved)
     results["max_memory_allocated_dif"].append(max_memory_allocated_dif)
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
+    results["input_size"].append(input_size)
 
 with open("snapkv-memory-benchmark.json", "w") as f:
     json.dump(results, f)

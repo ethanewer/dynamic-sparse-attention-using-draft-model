@@ -1,8 +1,11 @@
 import torch
+from minference import vertical_slash_sparse_attention  # type: ignore
 from torch import Tensor
-from transformers.models.llama.modeling_llama import LlamaAttention, repeat_kv  # type: ignore
+from transformers.models.llama.modeling_llama import (  # type: ignore
+    LlamaAttention,
+    repeat_kv,
+)
 from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention  # type: ignore
-from minference import vertical_slash_sparse_attention
 
 
 def das_minference_attention_forward(

@@ -137,13 +137,14 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_full_layers = full_reduced_attentions[0].shape[0]
         self.num_full_heads = full_reduced_attentions[0].shape[2]
 
-        if resume:
+        if resume and checkpoint_path is not None:
             checkpoint = torch.load(
                 checkpoint_path,
                 weights_only=False,
                 map_location=self.device,
             )
             self.model = checkpoint["model"]
+            assert self.model is not None
             optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=lr,
