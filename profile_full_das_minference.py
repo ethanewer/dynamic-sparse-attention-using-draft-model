@@ -1,21 +1,42 @@
 import gc
 import json
 from collections import defaultdict
+import time
 
 import torch
 from torch import Tensor
-from transformers import AutoModelForCausalLM  # type: ignore
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignore
 
-from dynamic_attention_sinks import dynamic_attention_sinks_generate_v3
+from das_minference import das_minference_generate, generate_reduced_attentions
+from reduced_attention_mapping import AverageAttentionMapping
 
 assert torch.cuda.is_available()
 device = "cuda"
 
-model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.2-1b-Instruct",
-    attn_implementation="flash_attention_2",
-    torch_dtype=torch.bfloat16,
-    device_map=device,
+attention_mapping = AverageAttentionMapping(
+    "reduced_attention_mapping/qwen_coder_mappings/average.pt",
+    device=device,
+)
+
+print(attention_mapping.w.shape)
+
+draft_model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-Coder-0.5B-Instruct",  # "meta-llama/Llama-3.2-1b-Instruct",
+    quantization_config=BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    ),
+    # torch_dtype=torch.bfloat16,
+    # device_map=device,
+)
+full_model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-Coder-7B-Instruct",  # "meta-llama/Llama-3.2-1b-Instruct",
+    quantization_config=BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    ),
+    # torch_dtype=torch.bfloat16,
+    # device_map=device,
 )
 
 
@@ -39,56 +60,59 @@ generation_kwargs = dict(
     pad_token_id=None,
 )
 
-dynamic_attention_sinks_generate_v3(
-    model=model,
+reduced_attentions = generate_reduced_attentions(
+    draft_model,
     input_ids=torch.randint(8192, (1, 2048), device=device),
-    reduced_attentions=torch.randn(
-        24,
-        1,
-        model.config.num_key_value_heads,
-        2048,
-        dtype=torch.bfloat16,
-    ),
-    block_size=2048 // 16,
-    k=2048 // 16,
+    generation_kwargs=generation_kwargs,
+)[1]
+
+das_minference_generate(
+    model=full_model,
+    input_ids=torch.randint(8192, (1, 2048), device=device),
+    reduced_attentions=attention_mapping(reduced_attentions),
+    window_size=2048 // 32,
+    max_capacity_prompt=2048 // 8,
     generation_kwargs=generation_kwargs,
 )
 
+clear_cache()
 
 max_memory_allocated_before = torch.cuda.max_memory_allocated() / 1024**2
 max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 32769, 2048):
+for input_size in range(2048, 16384, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
-    reduced_attentions = torch.randn(
-        24,
-        1,
-        model.config.num_key_value_heads,
-        input_size,
-        dtype=torch.bfloat16,
-    )
 
     clear_cache()
 
     print("\nINPUT SIZE:", input_size)
 
     torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
 
-    dynamic_attention_sinks_generate_v3(
-        model=model,
+    reduced_attentions = generate_reduced_attentions(
+        draft_model,
         input_ids=input_ids,
-        reduced_attentions=reduced_attentions,
-        block_size=input_size // 16,
-        k=input_size // 16,
+        generation_kwargs=generation_kwargs,
+    )[1]
+
+    das_minference_generate(
+        model=full_model,
+        input_ids=input_ids,
+        reduced_attentions=attention_mapping(reduced_attentions),
+        window_size=input_size // 32,
+        max_capacity_prompt=input_size // 8,
         generation_kwargs=generation_kwargs,
     )
 
+    dt = time.time() - t0
     max_memory_allocated = torch.cuda.max_memory_allocated() / 1024**2
     max_memory_reserved = torch.cuda.max_memory_reserved() / 1024**2
     max_memory_allocated_dif = max_memory_allocated - max_memory_allocated_before
     max_memory_reserved_dif = max_memory_reserved - max_memory_reserved_before
+    print(f"    Time: {dt:.4f}s")
     print(f"    Max GPU Memory Allocated: {max_memory_allocated:.2f} MB")
     print(f"    Max GPU Memory Reserved: {max_memory_reserved:.2f} MB")
     print(f"    Max New GPU Memory Allocated: {max_memory_allocated_dif:.2f} MB")
@@ -96,6 +120,8 @@ for input_size in range(2048, 32769, 2048):
 
     clear_cache()
 
+    results["input_size"].append(input_size)
+    results["time"].append(dt)
     results["max_memory_allocated"].append(max_memory_allocated)
     results["max_memory_reserved"].append(max_memory_reserved)
     results["max_memory_allocated_dif"].append(max_memory_allocated_dif)
@@ -103,10 +129,3 @@ for input_size in range(2048, 32769, 2048):
 
 with open("das-memory-benchmark.json", "w") as f:
     json.dump(results, f)
-
-
-# INPUT SIZE: 32768
-#     Max GPU Memory Allocated: 10792.85 MB
-#     Max GPU Memory Reserved: 11034.00 MB
-#     Max New GPU Memory Allocated: 7899.37 MB
-#     Max New GPU Memory Reserved: 7934.00 MB
