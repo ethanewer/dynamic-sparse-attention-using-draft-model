@@ -47,14 +47,11 @@ for path, _ in test_paths_and_names:
 train_data = load_data(train_paths_and_weights)
 len(train_data["draft_reduced_attentions"])
 
-mapping = ConvAttentionMapping(kernel_size=7, device="cuda").fit(
+mapping = ConvAttentionMapping(device="cuda").fit(
     **train_data,
     test_draft_reduced_attentions=val_data["draft_reduced_attentions"],
     test_full_reduced_attentions=val_data["full_reduced_attentions"],
-    checkpoint_path="reduced_attention_mapping/llama_mappings/conv_v4_checkpoint.pt",
-    lr=2.5e-4,
-    lr_decay=0,
-    num_iters=50,
+    checkpoint_path="reduced_attention_mapping/llama_mappings/conv_default_seeded_checkpoint.pt",
 )
 
-mapping.save("reduced_attention_mapping/llama_mappings/conv_v4.pt")
+mapping.save("reduced_attention_mapping/llama_mappings/conv_default_seeded.pt")

@@ -125,7 +125,7 @@ class ConvAttentionMapping(AttentionMapping):
         test_draft_reduced_attentions: Optional[list[Tensor]] = None,
         test_full_reduced_attentions: Optional[list[Tensor]] = None,
         objective: Literal["mse", "kl_div"] = "kl_div",
-        num_iters: int = 128,
+        num_iters: int = 256,
         lr: float = 1e-4,
         lr_decay: float = 0.1,
         weight_decay: float = 0.01,
