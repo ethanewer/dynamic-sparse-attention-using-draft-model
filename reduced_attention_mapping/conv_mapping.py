@@ -23,7 +23,8 @@ class ConvAttentionMapping(AttentionMapping):
         num_hidden_channels: int = 512,
         kernel_size: int = 9,
         dilation: int = 1,
-        normalized_reduced_attentions: bool = True,
+        standardize_inputs: bool = False,
+        normalize_inputs: bool = True,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
     ) -> None:
@@ -31,7 +32,8 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_hidden_channels = num_hidden_channels
         self.kernel_size = kernel_size
         self.dilation = dilation
-        self.normalized_reduced_attentions = normalized_reduced_attentions
+        self.standardize_inputs = standardize_inputs
+        self.normalize_inputs = normalize_inputs
         self.dtype = dtype
         self.device = device
         if path is not None:
@@ -41,6 +43,15 @@ class ConvAttentionMapping(AttentionMapping):
             self.num_draft_heads = parameters["num_draft_heads"]
             self.num_full_layers = parameters["num_full_layers"]
             self.num_full_heads = parameters["num_full_heads"]
+            if "standardize_inputs" in parameters:
+                self.standardize_inputs = parameters["standardize_inputs"]
+            else:
+                self.standardize_inputs = False
+
+            if "normalize_inputs" in parameters:
+                self.normalize_inputs = parameters["normalize_inputs"]
+            else:
+                self.normalize_inputs = True
 
     def init_model(self) -> nn.Module:
         assert (
@@ -108,7 +119,7 @@ class ConvAttentionMapping(AttentionMapping):
         if objective == "mse":
             return F.mse_loss(output, target)
         elif objective == "kl_div":
-            if self.normalized_reduced_attentions:
+            if self.normalize_inputs:
                 target = (target / target.sum(dim=-1)[..., None]).log()
             else:
                 target = target.log_softmax(dim=-1)
@@ -219,6 +230,8 @@ class ConvAttentionMapping(AttentionMapping):
                             "num_draft_heads": self.num_draft_heads,
                             "num_full_layers": self.num_full_layers,
                             "num_full_heads": self.num_full_heads,
+                            "standardize_inputs": self.standardize_inputs,
+                            "normalize_inputs": self.normalize_inputs,
                             "optimizer": optimizer.state_dict(),
                             "scheduler": scheduler.state_dict(),
                         },
@@ -260,7 +273,10 @@ class ConvAttentionMapping(AttentionMapping):
         if a.device != self.device:
             a = a.to(device=self.device)
 
-        if self.normalized_reduced_attentions:
+        if self.standardize_inputs:
+            a -= a.mean(dim=-1)[..., None]
+            a /= a.std(dim=-1)[..., None]
+        elif self.normalize_inputs:
             a /= a.sum(dim=-1)[..., None]
 
         return self.unstack(self.model(self.stack(a)))
@@ -286,6 +302,8 @@ class ConvAttentionMapping(AttentionMapping):
                 "num_draft_heads": self.num_draft_heads,
                 "num_full_layers": self.num_full_layers,
                 "num_full_heads": self.num_full_heads,
+                "standardize_inputs": self.standardize_inputs,
+                "normalize_inputs": self.normalize_inputs,
             },
             path,
         )
