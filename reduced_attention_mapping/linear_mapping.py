@@ -50,9 +50,12 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
         self,
         draft_reduced_attentions: list[Tensor],
         full_reduced_attentions: list[Tensor],
+        test_draft_reduced_attentions: Optional[list[Tensor]] = None,
+        test_full_reduced_attentions: Optional[list[Tensor]] = None,
         num_iters: int = 32,
         lr: float = 1e-3,
         lr_decay: float = 0.1,
+        weight_decay: float = 0,
     ) -> Self:
         num_draft_layers = draft_reduced_attentions[0].shape[0]
         num_draft_heads = draft_reduced_attentions[0].shape[2]
@@ -73,15 +76,20 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
             device=self.device,
         )
 
-        optimizer = torch.optim.Adam([unnormalized_w], lr=lr)
+        optimizer = torch.optim.AdamW(
+            [unnormalized_w],
+            lr=lr,
+            weight_decay=weight_decay,
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             num_iters,
             lr * lr_decay,
         )
+        min_test_loss = float("inf")
         progress_bar = trange(num_iters, desc="[]")
         for _ in progress_bar:
-            losses = []
+            train_losses = []
             permutation: list[int] = np.random.permutation(
                 len(draft_reduced_attentions)
             ).tolist()
@@ -94,10 +102,33 @@ class LinearAttentionMapping(BaseLinearAttentionMapping):
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
-                    losses.append(loss.item())
+                    train_losses.append(loss.item())
 
             scheduler.step()
-            progress_bar.set_description(f"[loss: {sum(losses) / len(losses):.4f}]")
+            train_loss = sum(train_losses) / len(train_losses)
+
+            if (
+                test_draft_reduced_attentions is not None
+                and test_full_reduced_attentions is not None
+            ):
+                test_losses = []
+                self.w = unnormalized_w.softmax(dim=0).view(w_shape)
+                for i in range(len(test_draft_reduced_attentions)):
+                    x = test_draft_reduced_attentions[i].to(self.device, self.dtype)
+                    y = test_full_reduced_attentions[i].to(self.device, self.dtype)
+                    with torch.no_grad():
+                        loss = F.kl_div(self(x).log(), y, reduction="batchmean")
+
+                    if torch.isfinite(loss):
+                        test_losses.append(loss.item())
+
+                test_loss = sum(test_losses) / len(test_losses)
+                min_test_loss = min(min_test_loss, test_loss)
+                progress_bar.set_description(
+                    f"[train loss: {train_loss:.4f}, test loss: {test_loss:.4f}, min test loss: {min_test_loss:.4f}]"
+                )
+            else:
+                progress_bar.set_description(f"[train loss: {train_loss:.4f}]")
 
         self.w = unnormalized_w.softmax(dim=0).view(w_shape).detach()
         return self

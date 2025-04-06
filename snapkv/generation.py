@@ -19,6 +19,7 @@ def snapkv_generate(
     attention_mask: Tensor,
     window_size: int,
     max_capacity_prompt: int,
+    kernel_size: int = 5,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
@@ -30,6 +31,7 @@ def snapkv_generate(
 
     model.config.max_capacity_prompt = max_capacity_prompt
     model.config.window_size = window_size
+    model.config.kernel_size = kernel_size
 
     return model.generate(  # type: ignore
         input_ids=input_ids,
@@ -46,6 +48,7 @@ def lookahead_snapkv_generate(
     lookahead_ids: Tensor,
     window_size: int,
     max_capacity_prompt: int,
+    kernel_size: int = 5,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
@@ -59,6 +62,7 @@ def lookahead_snapkv_generate(
 
     model.config.max_capacity_prompt = max_capacity_prompt + lookahead_size + 1
     model.config.window_size = window_size + lookahead_size + 1
+    model.config.kernel_size = kernel_size
 
     extended_attention_mask = F.pad(attention_mask, (0, lookahead_size), value=1)
 

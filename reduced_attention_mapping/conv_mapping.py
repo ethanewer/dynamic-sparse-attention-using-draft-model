@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-from tqdm.notebook import trange  # type: ignore
+from tqdm import trange  # type: ignore
 
 from .attention_mapping import AttentionMapping, T
 
@@ -23,7 +23,6 @@ class ConvAttentionMapping(AttentionMapping):
         num_hidden_channels: int = 512,
         kernel_size: int = 9,
         dilation: int = 1,
-        standardize_inputs: bool = False,
         normalize_inputs: bool = True,
         dtype: torch.dtype = torch.float32,
         device: torch.device | str = "cpu",
@@ -32,7 +31,6 @@ class ConvAttentionMapping(AttentionMapping):
         self.num_hidden_channels = num_hidden_channels
         self.kernel_size = kernel_size
         self.dilation = dilation
-        self.standardize_inputs = standardize_inputs
         self.normalize_inputs = normalize_inputs
         self.dtype = dtype
         self.device = device
@@ -43,10 +41,6 @@ class ConvAttentionMapping(AttentionMapping):
             self.num_draft_heads = parameters["num_draft_heads"]
             self.num_full_layers = parameters["num_full_layers"]
             self.num_full_heads = parameters["num_full_heads"]
-            if "standardize_inputs" in parameters:
-                self.standardize_inputs = parameters["standardize_inputs"]
-            else:
-                self.standardize_inputs = False
 
             if "normalize_inputs" in parameters:
                 self.normalize_inputs = parameters["normalize_inputs"]
@@ -273,10 +267,7 @@ class ConvAttentionMapping(AttentionMapping):
         if a.device != self.device:
             a = a.to(device=self.device)
 
-        if self.standardize_inputs:
-            a -= a.mean(dim=-1)[..., None]
-            a /= a.std(dim=-1)[..., None]
-        elif self.normalize_inputs:
+        if self.normalize_inputs:
             a /= a.sum(dim=-1)[..., None]
 
         return self.unstack(self.model(self.stack(a)))
