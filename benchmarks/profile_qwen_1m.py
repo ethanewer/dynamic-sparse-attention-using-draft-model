@@ -58,7 +58,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 80000, 2048):
+for input_size in range(2048, 66000, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
 
     clear_cache()

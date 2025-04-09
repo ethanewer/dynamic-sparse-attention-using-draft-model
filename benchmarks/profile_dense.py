@@ -12,7 +12,7 @@ device = "cuda"
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-14B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
     attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
@@ -55,7 +55,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 80000, 2048):
+for input_size in range(2048, 100000, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
 
     clear_cache()
@@ -90,5 +90,5 @@ for input_size in range(2048, 80000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-    with open("dense.json", "w") as f:
+    with open("quantized-llama-dense.json", "w") as f:
         json.dump(results, f)

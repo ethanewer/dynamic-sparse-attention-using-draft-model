@@ -14,7 +14,7 @@ device = "cuda"
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-14B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
     attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
@@ -61,7 +61,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 80000, 2048):
+for input_size in range(2048, 100000, 2048):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     attention_mask = torch.ones_like(input_ids)
 
@@ -76,8 +76,8 @@ for input_size in range(2048, 80000, 2048):
         model=model,
         input_ids=input_ids,
         attention_mask=attention_mask,
-        window_size=input_size // 32,
-        max_capacity_prompt=input_size // 8,
+        window_size=64,
+        max_capacity_prompt=1024,
         generation_kwargs=generation_kwargs,
     )
 
@@ -101,5 +101,5 @@ for input_size in range(2048, 80000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("snapkv-benchmark.json", "w") as f:
+with open("quantized-llama-snapkv-benchmark.json", "w") as f:
     json.dump(results, f)
