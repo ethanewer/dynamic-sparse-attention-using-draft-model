@@ -76,7 +76,7 @@ class Qwen2AttentionSnapKV(Qwen2Attention):
                 -64,
                 dtype=v_idx.dtype,
                 device=v_idx.device,
-            )[None, None, None].expand(*v_idx.shape[:-1], -1)
+            )[None, None].expand(*v_idx.shape[:-1], -1)
 
             attn_output, attn_weights = vertical_slash_sparse_attention_forward(
                 self,
