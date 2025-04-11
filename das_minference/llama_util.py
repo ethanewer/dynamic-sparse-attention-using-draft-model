@@ -2,9 +2,9 @@ from typing import Callable, Optional
 
 import torch
 from torch import Tensor
-from transformers import Cache  # type: ignore
-from transformers.models.llama.modeling_llama import (  # type: ignore
-    ALL_ATTENTION_FUNCTIONS,
+from transformers.cache_utils import Cache
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     apply_rotary_pos_emb,
     eager_attention_forward,

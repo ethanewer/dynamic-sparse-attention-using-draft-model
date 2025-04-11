@@ -7,11 +7,11 @@ from transformers.cache_utils import DynamicCache
 from transformers.models.llama import LlamaForCausalLM
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
-from .llama_util import update_llama_model_for_snapkv
-from .qwen2_util import update_qwen2_model_for_snapkv
+from .llama_util import update_llama_model_for_sparse_prefill_snapkv
+from .qwen2_util import update_qwen2_model_for_sparse_prefill_snapkv
 
 
-def snapkv_generate(
+def sparse_prefill_snapkv_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     attention_mask: Tensor,
@@ -21,9 +21,9 @@ def snapkv_generate(
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
-        update_llama_model_for_snapkv(model)
+        update_llama_model_for_sparse_prefill_snapkv(model)
     elif isinstance(model, Qwen2ForCausalLM):
-        update_qwen2_model_for_snapkv(model)
+        update_qwen2_model_for_sparse_prefill_snapkv(model)
     else:
         raise NotImplementedError()
 
@@ -39,7 +39,7 @@ def snapkv_generate(
     )
 
 
-def lookahead_snapkv_generate(
+def lookahead_sparse_prefill_snapkv_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     attention_mask: Tensor,
@@ -50,9 +50,9 @@ def lookahead_snapkv_generate(
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
-        update_llama_model_for_snapkv(model)
+        update_llama_model_for_sparse_prefill_snapkv(model)
     elif isinstance(model, Qwen2ForCausalLM):
-        update_qwen2_model_for_snapkv(model)
+        update_qwen2_model_for_sparse_prefill_snapkv(model)
     else:
         raise NotImplementedError()
 

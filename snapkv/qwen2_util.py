@@ -1,9 +1,9 @@
 from typing import Callable, Optional
 
 import torch
-from transformers import Cache  # type: ignore
-from transformers.models.qwen2.modeling_qwen2 import (  # type: ignore
-    ALL_ATTENTION_FUNCTIONS,
+from transformers.cache_utils import Cache
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Attention,
     apply_rotary_pos_emb,
     eager_attention_forward,

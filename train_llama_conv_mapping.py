@@ -1,6 +1,7 @@
-import torch
-import numpy as np
 from collections import defaultdict
+
+import numpy as np
+import torch
 
 from reduced_attention_mapping import ConvAttentionMapping
 
@@ -69,10 +70,10 @@ test_paths_and_names = [
 
 train_data = load_data(train_paths_and_weights)
 
-print(f"{len(train_data["draft_reduced_attentions"])=}")
+print(f"{len(train_data['draft_reduced_attentions'])=}")
 
 mapping = ConvAttentionMapping(device="cuda").fit(
-    **train_data,
+    **train_data,  # type: ignore
     # test_draft_reduced_attentions=val_data["draft_reduced_attentions"],
     # test_full_reduced_attentions=val_data["full_reduced_attentions"],
     checkpoint_path="reduced_attention_mapping/llama_mappings/conv_ruler_only_checkpoint.pt",

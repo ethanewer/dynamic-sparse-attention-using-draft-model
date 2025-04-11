@@ -2,11 +2,9 @@ from typing import Any
 
 import torch
 from torch import Tensor
-from transformers import (  # type: ignore
-    DynamicCache,
-    LlamaForCausalLM,
-    Qwen2ForCausalLM,
-)
+from transformers.cache_utils import DynamicCache
+from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 from .llama_util import update_llama_model_for_das_minference
 from .qwen2_util import update_qwen2_model_for_das_minference

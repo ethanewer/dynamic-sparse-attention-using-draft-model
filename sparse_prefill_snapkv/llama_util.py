@@ -10,7 +10,7 @@ from transformers.models.llama.modeling_llama import (
     logger,
 )
 
-from .snapkv_util import init_snapkv
+from .util import compress_kv, vertical_slash_sparse_attention_forward
 
 
 class LlamaAttentionSnapKV(LlamaAttention):
@@ -23,8 +23,6 @@ class LlamaAttentionSnapKV(LlamaAttention):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
-        init_snapkv(self)
-
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -37,16 +35,23 @@ class LlamaAttentionSnapKV(LlamaAttention):
             query_states, key_states, cos, sin
         )
 
+        indices = None
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
 
-            if past_key_value.get_seq_length(self.layer_idx) == 0:
-                key_states_compress, value_states_compress = self.kv_cluster.update_kv(  # type: ignore
+            if (
+                past_key_value.get_seq_length(self.layer_idx) == 0
+                and query_states.shape[2] > self.config.max_capacity_prompt
+            ):
+                key_states_compress, value_states_compress, indices = compress_kv(
                     key_states,
                     query_states,
                     value_states,
                     attention_mask,
+                    window_size=self.config.window_size,
+                    max_capacity_prompt=self.config.max_capacity_prompt,
+                    pooling=self.config.pooling,
+                    kernel_size=self.config.kernel_size,
                 )
 
                 past_key_value.update(
@@ -63,37 +68,62 @@ class LlamaAttentionSnapKV(LlamaAttention):
                     cache_kwargs,
                 )
 
-        attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            if self.config._attn_implementation == "sdpa" and kwargs.get(
-                "output_attentions", False
-            ):
-                logger.warning_once(  # type: ignore
-                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
-                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-                )
-            else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[  # type: ignore
-                    self.config._attn_implementation
-                ]
+        if indices is not None:
+            v_idx = indices.int()
+            s_idx = torch.arange(
+                self.config.window_size,
+                -1,
+                -64,
+                dtype=v_idx.dtype,
+                device=v_idx.device,
+            )[None, None, None].expand(*v_idx.shape[:-1], -1)
 
-        attn_output, attn_weights = attention_interface(
-            self,
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            **kwargs,
-        )
+            attn_output, attn_weights = vertical_slash_sparse_attention_forward(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                v_idx,
+                s_idx,
+            )
+        else:
+            attention_interface: Callable = eager_attention_forward
+            if self.config._attn_implementation != "eager":
+                if self.config._attn_implementation == "sdpa" and kwargs.get(
+                    "output_attentions", False
+                ):
+                    logger.warning_once(  # type: ignore
+                        "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
+                        'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+                    )
+                else:
+                    attention_interface = ALL_ATTENTION_FUNCTIONS[  # type: ignore
+                        self.config._attn_implementation
+                    ]
+
+            attn_output, attn_weights = attention_interface(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=0.0 if not self.training else self.attention_dropout,
+                scaling=self.scaling,
+                **kwargs,
+            )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
+
         return attn_output, attn_weights  # type: ignore
 
 
-def update_llama_model_for_snapkv(model):
+def update_llama_model_for_sparse_prefill_snapkv(model):
+    model.config.window_size = 64
+    model.config.max_capacity_prompt = 1024
+    model.config.pooling = "avgpool"
+    model.config.kernel_size = 5
+
     for i in range(len(model.model.layers)):
         model.model.layers[i].self_attn.forward = LlamaAttentionSnapKV.forward.__get__(
             model.model.layers[i].self_attn,
