@@ -67,7 +67,7 @@ def lookahead_sparse_prefill_snapkv_generate(
     past_key_values = DynamicCache()
 
     with torch.no_grad():
-        model(
+        model.model(
             input_ids=lookahead_ids,
             attention_mask=extended_attention_mask,
             past_key_values=past_key_values,
