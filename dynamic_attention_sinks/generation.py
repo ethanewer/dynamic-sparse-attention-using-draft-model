@@ -2,12 +2,9 @@ from typing import Any, Literal, Optional
 
 import torch
 from torch import Tensor
-from transformers import (  # type: ignore
-    Cache,
-    DynamicCache,
-    LlamaForCausalLM,
-    Qwen2ForCausalLM,
-)
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 from .indices_util import (
     get_cache_update_indices,

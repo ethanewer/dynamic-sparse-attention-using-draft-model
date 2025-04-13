@@ -2,11 +2,9 @@ from typing import Optional
 
 import torch
 from torch import Tensor
-from transformers import (  # type: ignore
-    Cache,
-    LlamaForCausalLM,
-    Qwen2ForCausalLM,
-)
+from transformers.cache_utils import Cache
+from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 
 def dsa_step(

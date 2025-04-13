@@ -14,21 +14,20 @@ def generate_reduced_attentions(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     generation_kwargs: dict[str, Any] = {},
-    generate_model: LlamaForCausalLM | Qwen2ForCausalLM | None = None,
 ) -> tuple[Tensor, Tensor]:
     past_key_values = DynamicCache()
 
     with torch.no_grad():
-        _ = model(
+        _ = model.model(
             input_ids=input_ids[:, :-1],
             past_key_values=past_key_values,
             use_cache=True,
         )
 
-    if generate_model is None:
-        generate_model = model
+    attn_implementation = model.config._attn_implementation
+    model.config._attn_implementation = "eager"
 
-    outputs = generate_model.generate(
+    outputs = model.generate(
         input_ids,
         attention_mask=torch.ones_like(input_ids),
         output_attentions=True,
@@ -38,7 +37,9 @@ def generate_reduced_attentions(
         **generation_kwargs,
     )
 
-    sequences: Tensor = outputs.sequences  # type: ignore
+    model.config._attn_implementation = attn_implementation
+
+    sequences = outputs.sequences  # type: ignore
     attentions: tuple[tuple[Tensor, ...], ...] = outputs.attentions  # type: ignore
 
     reduced_attentions = [

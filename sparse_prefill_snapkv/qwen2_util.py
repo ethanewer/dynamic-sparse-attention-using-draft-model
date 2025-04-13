@@ -50,6 +50,7 @@ class Qwen2AttentionSnapKV(Qwen2Attention):
                     attention_mask,
                     window_size=self.config.window_size,
                     max_capacity_prompt=self.config.max_capacity_prompt,
+                    num_vertical=self.config.num_vertical,
                     pooling=self.config.pooling,
                     kernel_size=self.config.kernel_size,
                 )
@@ -69,9 +70,9 @@ class Qwen2AttentionSnapKV(Qwen2Attention):
                 )
 
         if indices is not None:
-            v_idx = indices.int()
+            v_idx = indices[..., : self.config.num_vertical].int()
             s_idx = torch.arange(
-                self.config.window_size,
+                self.config.prefill_window_size,
                 -1,
                 -64,
                 dtype=v_idx.dtype,

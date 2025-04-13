@@ -1,11 +1,9 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from transformers import (  # type: ignore
-    DynamicCache,
-    LlamaForCausalLM,
-    Qwen2ForCausalLM,
-)
+from transformers.cache_utils import DynamicCache
+from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 from .dsa import dsa_step
 from .llama_util import update_llama_model_for_dsa

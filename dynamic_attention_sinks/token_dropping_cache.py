@@ -1,6 +1,7 @@
-from transformers import DynamicCache  # type: ignore
 from typing import Optional
+
 from torch import Tensor
+from transformers.cache_utils import DynamicCache
 
 
 class TokenDroppingCache(DynamicCache):
@@ -22,7 +23,7 @@ class TokenDroppingCache(DynamicCache):
         ), (indices.shape, self.key_cache[layer_idx if layer_idx else 0].shape)
 
         if layer_idx is None:
-            for layer_idx in range(len(self)):
+            for layer_idx in range(len(self)):  # type: ignore
                 self.key_cache[layer_idx] = self.key_cache[layer_idx].gather(
                     dim=2,
                     index=indices,

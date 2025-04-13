@@ -3,8 +3,8 @@ from typing import Callable, Optional
 import torch
 from torch import Tensor
 from transformers import Cache  # type: ignore
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.qwen2.modeling_qwen2 import (  # type: ignore
-    ALL_ATTENTION_FUNCTIONS,
     Qwen2Attention,
     apply_rotary_pos_emb,
     eager_attention_forward,
@@ -47,7 +47,7 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
             and "dynamic_attention_sinks_indices" in kwargs
             and (
                 past_key_value is None
-                or past_key_value.get_seq_length(self.layer_idx) == 0
+                or past_key_value.get_seq_length(self.layer_idx) == 0  # type: ignore
             )
         ):
             assert not kwargs.get("output_attentions", False)
@@ -76,7 +76,7 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
                     if cache_position is not None
                     else None
                 }
-                past_key_value.update(
+                past_key_value.update(  # type: ignore
                     compressed_key,
                     compressed_value,
                     self.layer_idx,
@@ -123,7 +123,7 @@ class Qwen2AttentionDynamicAttentionSinks(Qwen2Attention):
                     "cos": cos,  # type: ignore
                     "cache_position": cache_position,
                 }
-                key_states, value_states = past_key_value.update(
+                key_states, value_states = past_key_value.update(  # type: ignore
                     key_states,
                     value_states,
                     self.layer_idx,
@@ -194,7 +194,7 @@ class Qwen2AttentionOutputUnnormalized(Qwen2Attention):
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(
+            key_states, value_states = past_key_value.update(  # type: ignore
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
 

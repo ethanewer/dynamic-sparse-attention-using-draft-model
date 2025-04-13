@@ -1,6 +1,7 @@
 from typing import Optional
+
 import torch
-from torch import nn, Tensor
+from torch import Tensor, nn
 from transformers.models.llama.modeling_llama import repeat_kv  # type: ignore
 
 
@@ -14,8 +15,8 @@ def eager_attention_output_unnormalized_forward(
     dropout: float = 0.0,
     **kwargs,
 ) -> tuple[Tensor, Tensor]:
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    key_states = repeat_kv(key, module.num_key_value_groups)  # type: ignore
+    value_states = repeat_kv(value, module.num_key_value_groups)  # type: ignore
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
 

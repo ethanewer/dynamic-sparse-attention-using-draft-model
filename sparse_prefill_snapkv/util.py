@@ -58,6 +58,7 @@ def compress_kv(
     attention_mask: Optional[Tensor],
     window_size: int,
     max_capacity_prompt: int,
+    num_vertical: int,
     pooling: str,
     kernel_size: int,
 ) -> tuple[Tensor, Tensor, Tensor]:
@@ -114,11 +115,12 @@ def compress_kv(
         raise ValueError("Pooling method not supported")
 
     indices = attention_cache.topk(
-        max_capacity_prompt - window_size,
+        max(max_capacity_prompt - window_size, num_vertical),
         dim=-1,
     ).indices
+    topk_indices = indices[..., : max_capacity_prompt - window_size]
+    gather_indices = topk_indices[..., None].expand(-1, -1, -1, head_dim)
 
-    gather_indices = indices[..., None].expand(-1, -1, -1, head_dim)
     key_past_compress = key_states[:, :, :-window_size, :].gather(
         dim=2,
         index=gather_indices,
