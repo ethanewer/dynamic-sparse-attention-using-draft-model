@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -23,6 +23,8 @@ def sparse_prefill_snapkv_generate(
     max_capacity_prompt: int,
     prefill_window_size: int = 1024,
     num_vertical: int = 1024,
+    query_aggregation: Literal["mean", "max"] = "mean",
+    pooling: Literal["mean", "max"] = "mean",
     kernel_size: int = 15,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
@@ -33,10 +35,12 @@ def sparse_prefill_snapkv_generate(
     else:
         raise NotImplementedError()
 
-    model.config.max_capacity_prompt = max_capacity_prompt
     model.config.window_size = window_size
-    model.config.num_vertical = num_vertical
+    model.config.max_capacity_prompt = max_capacity_prompt
     model.config.prefill_window_size = prefill_window_size
+    model.config.num_vertical = num_vertical
+    model.config.query_aggregation = query_aggregation
+    model.config.pooling = pooling
     model.config.kernel_size = kernel_size
 
     return model.generate(  # type: ignore
@@ -56,6 +60,8 @@ def lookahead_sparse_prefill_snapkv_generate(
     max_capacity_prompt: int,
     prefill_window_size: int = 1024,
     num_vertical: int = 1024,
+    query_aggregation: Literal["mean", "max"] = "mean",
+    pooling: Literal["mean", "max"] = "mean",
     kernel_size: int = 15,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
@@ -68,10 +74,12 @@ def lookahead_sparse_prefill_snapkv_generate(
 
     lookahead_size = lookahead_ids.shape[1] - input_ids.shape[1]
 
-    model.config.max_capacity_prompt = max_capacity_prompt + lookahead_size + 1
     model.config.window_size = window_size + lookahead_size + 1
-    model.config.num_vertical = num_vertical
+    model.config.max_capacity_prompt = max_capacity_prompt + lookahead_size + 1
     model.config.prefill_window_size = prefill_window_size
+    model.config.num_vertical = num_vertical
+    model.config.query_aggregation = query_aggregation
+    model.config.pooling = pooling
     model.config.kernel_size = kernel_size
 
     extended_attention_mask = F.pad(attention_mask, (0, lookahead_size), value=1)

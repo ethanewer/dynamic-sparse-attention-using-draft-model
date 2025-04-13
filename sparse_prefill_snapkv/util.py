@@ -35,34 +35,19 @@ def vertical_slash_sparse_attention_forward(
     return attention_output, None
 
 
-def reduce_attention_scores_for_gqa(
-    attention_scores: Tensor,
-    n_rep: int,
-    reduction: Literal["mean", "max"],
-) -> Tensor:
-    batch, num_attention_heads, seq_len, head_dim = attention_scores.shape
+def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
+    batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
     if n_rep == 1:
-        return attention_scores
+        return hidden_states
 
     num_key_value_heads = num_attention_heads // n_rep
-    if reduction == "mean":
-        return attention_scores.view(
-            batch,
-            num_key_value_heads,
-            n_rep,
-            seq_len,
-            head_dim,
-        ).mean(dim=2)
-    elif reduction == "max":
-        return attention_scores.view(
-            batch,
-            num_key_value_heads,
-            n_rep,
-            seq_len,
-            head_dim,
-        ).mean(dim=2)
-    else:
-        raise ValueError(f"{reduction=} not supported.")
+    return hidden_states.view(
+        batch,
+        num_key_value_heads,
+        n_rep,
+        seq_len,
+        head_dim,
+    ).mean(dim=2)
 
 
 def compress_kv(
@@ -80,8 +65,12 @@ def compress_kv(
     assert key_states.shape[-2] == seq_len
     assert seq_len > max_capacity_prompt
 
-    num_key_value_groups = query_states.shape[1] // key_states.shape[1]
-    key_states = repeat_kv(key_states, num_key_value_groups)
+    if query_states.shape[1] > key_states.shape[1]:
+        query_states = pool_queries_for_gqa(
+            query_states,
+            query_states.shape[1] // key_states.shape[1],
+        )
+        assert query_states.shape[1] == key_states.shape[1]
 
     attention_scores = torch.matmul(
         query_states[..., -window_size:, :],
@@ -104,12 +93,6 @@ def compress_kv(
         attention_scores = attention_scores.max(dim=-2).values
     else:
         raise ValueError(f"{query_aggregation=} not supported.")
-
-    attention_scores = reduce_attention_scores_for_gqa(
-        attention_scores,
-        num_key_value_groups,
-        query_aggregation,
-    )
 
     if pooling == "mean":
         attention_scores = F.avg_pool1d(

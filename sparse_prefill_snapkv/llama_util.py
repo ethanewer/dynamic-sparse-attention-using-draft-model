@@ -47,10 +47,10 @@ class LlamaAttentionSnapKV(LlamaAttention):
                     key_states,
                     query_states,
                     value_states,
-                    attention_mask,
                     window_size=self.config.window_size,
                     max_capacity_prompt=self.config.max_capacity_prompt,
                     num_vertical=self.config.num_vertical,
+                    query_aggregation=self.config.query_aggregation,
                     pooling=self.config.pooling,
                     kernel_size=self.config.kernel_size,
                 )
@@ -122,8 +122,11 @@ class LlamaAttentionSnapKV(LlamaAttention):
 def update_llama_model_for_sparse_prefill_snapkv(model):
     model.config.window_size = 64
     model.config.max_capacity_prompt = 1024
-    model.config.pooling = "avgpool"
-    model.config.kernel_size = 5
+    model.config.prefill_window_size = 1024
+    model.config.num_vertical = 1024
+    model.config.query_aggregation = "mean"
+    model.config.pooling = "mean"
+    model.config.kernel_size = 15
 
     for i in range(len(model.model.layers)):
         model.model.layers[i].self_attn.forward = LlamaAttentionSnapKV.forward.__get__(
