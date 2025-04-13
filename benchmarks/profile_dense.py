@@ -10,10 +10,8 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignor
 assert torch.cuda.is_available()
 device = "cuda"
 
-
 model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.1-8B-Instruct",
-    attn_implementation="flash_attention_2",
+    "Qwen/Qwen2.5-7B-Instruct",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -44,7 +42,8 @@ generation_kwargs = dict(
 )
 
 model.generate(
-    input_ids=torch.randint(8192, (1, 2048), device=device),
+    input_ids=torch.randint(8192, (1, 8192), device=device),
+    attention_mask=torch.ones(1, 8192, device=device),
     **generation_kwargs,
 )
 
@@ -55,8 +54,9 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 100000, 2048):
+for input_size in range(8192, 82000, 8192):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
+    attention_mask = torch.ones_like(input_ids)
 
     clear_cache()
 
@@ -67,6 +67,7 @@ for input_size in range(2048, 100000, 2048):
 
     model.generate(
         input_ids=input_ids,
+        attention_mask=attention_mask,
         **generation_kwargs,
     )
 
@@ -90,5 +91,6 @@ for input_size in range(2048, 100000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-    with open("quantized-llama-dense.json", "w") as f:
-        json.dump(results, f)
+
+with open("quantized-7b-dense-benchmark.json", "w") as f:
+    json.dump(results, f)

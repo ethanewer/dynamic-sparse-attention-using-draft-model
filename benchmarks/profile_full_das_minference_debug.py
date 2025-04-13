@@ -96,16 +96,25 @@ for input_size in range(8192, 82000, 8192):
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
 
-    reduced_attentions = generate_reduced_attentions(
+    _reduced_attentions = generate_reduced_attentions(
         draft_model,
         input_ids=input_ids,
         generation_kwargs=generation_kwargs,
     )[1]
 
+    reduced_attentions = torch.randn(
+        full_model.config.num_hidden_layers,
+        1,
+        full_model.config.num_key_value_heads,
+        input_size,
+        dtype=torch.bfloat16,
+        device="cuda",
+    )
+
     das_minference_generate(
         model=full_model,
         input_ids=input_ids,
-        reduced_attentions=attention_mapping(reduced_attentions),
+        reduced_attentions=reduced_attentions,
         window_size=64,
         max_capacity_prompt=1024,
         generation_kwargs=generation_kwargs,
@@ -131,5 +140,5 @@ for input_size in range(8192, 82000, 8192):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("quantized-qwen-das-full-benchmark.json", "w") as f:
+with open("quantized-qwen-das-full-benchmark-debug.json", "w") as f:
     json.dump(results, f)

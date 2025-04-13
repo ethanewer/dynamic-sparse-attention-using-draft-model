@@ -4,17 +4,18 @@ import time
 from collections import defaultdict
 
 import torch
+from minference import MInference  # type: ignore
 from torch import Tensor
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignore
 
-from das_minference import das_minference_generate, generate_reduced_attentions
-from reduced_attention_mapping import AverageAttentionMapping
+from snapkv import minference_snapkv_generate
 
 assert torch.cuda.is_available()
 device = "cuda"
 
-draft_model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.2-1B-Instruct",
+
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-7B-Instruct",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -23,25 +24,13 @@ draft_model = AutoModelForCausalLM.from_pretrained(
     ),
 )
 
-full_model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.1-8B-Instruct",
-    attn_implementation="flash_attention_2",
-    quantization_config=BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    ),
+minference_patch = MInference(
+    "minference",
+    "Qwen/Qwen2.5-7B-Instruct",
+    kv_type="snapkv",
 )
 
-attention_mapping = AverageAttentionMapping(device=device)
-attention_mapping.w = torch.ones(
-    draft_model.config.num_hidden_layers,
-    draft_model.config.num_key_value_heads,
-    full_model.config.num_hidden_layers,
-    full_model.config.num_key_value_heads,
-    device=device,
-)
+model = minference_patch(model)
 
 
 def clear_cache():
@@ -64,18 +53,14 @@ generation_kwargs = dict(
     pad_token_id=None,
 )
 
-reduced_attentions = generate_reduced_attentions(
-    draft_model,
-    input_ids=torch.randint(8192, (1, 2048), device=device),
-    generation_kwargs=generation_kwargs,
-)[1]
-
-das_minference_generate(
-    model=full_model,
-    input_ids=torch.randint(8192, (1, 16384), device=device),
-    reduced_attentions=attention_mapping(reduced_attentions),
-    window_size=16384 // 32,
-    max_capacity_prompt=16384 // 8,
+minference_snapkv_generate(
+    model=model,
+    minference_config=minference_patch.config,
+    input_ids=torch.randint(8192, (1, 8192), device=device),
+    attention_mask=torch.ones(1, 8192, device=device),
+    window_size=64,
+    max_capacity_prompt=1024,
+    kernel_size=15,
     generation_kwargs=generation_kwargs,
 )
 
@@ -86,8 +71,9 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 100000, 2048):
+for input_size in range(8192, 82000, 8192):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
+    attention_mask = torch.ones_like(input_ids)
 
     clear_cache()
 
@@ -96,18 +82,14 @@ for input_size in range(2048, 100000, 2048):
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
 
-    reduced_attentions = generate_reduced_attentions(
-        draft_model,
+    minference_snapkv_generate(
+        model=model,
+        minference_config=minference_patch.config,
         input_ids=input_ids,
-        generation_kwargs=generation_kwargs,
-    )[1]
-
-    das_minference_generate(
-        model=full_model,
-        input_ids=input_ids,
-        reduced_attentions=attention_mapping(reduced_attentions),
+        attention_mask=attention_mask,
         window_size=64,
         max_capacity_prompt=1024,
+        kernel_size=15,
         generation_kwargs=generation_kwargs,
     )
 
@@ -131,5 +113,5 @@ for input_size in range(2048, 100000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("quantized-llama-das-full-benchmark.json", "w") as f:
+with open("quantized-7b-minference-snapkv-benchmark.json", "w") as f:
     json.dump(results, f)

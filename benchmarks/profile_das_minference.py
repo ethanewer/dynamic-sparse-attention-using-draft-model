@@ -13,7 +13,7 @@ assert torch.cuda.is_available()
 device = "cuda"
 
 model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.1-8B-Instruct",
+    "Qwen/Qwen2.5-14B-Instruct",
     attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
@@ -46,17 +46,17 @@ generation_kwargs = dict(
 
 das_minference_generate(
     model=model,
-    input_ids=torch.randint(8192, (1, 2048), device=device),
+    input_ids=torch.randint(8192, (1, 8192), device=device),
     reduced_attentions=torch.randn(
         model.config.num_hidden_layers,
         1,
         model.config.num_key_value_heads,
-        2048,
+        8192,
         dtype=torch.bfloat16,
         device="cuda",
     ),
-    window_size=2048 // 32,
-    max_capacity_prompt=2048 // 8,
+    window_size=64,
+    max_capacity_prompt=1024,
     generation_kwargs=generation_kwargs,
 )
 
@@ -67,7 +67,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 100000, 2048):
+for input_size in range(8192, 82000, 8192):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     reduced_attentions = torch.randn(
         model.config.num_hidden_layers,
@@ -114,5 +114,5 @@ for input_size in range(2048, 100000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("quantized-llama-das-benchmark.json", "w") as f:
+with open("quantized-qwen-das-benchmark.json", "w") as f:
     json.dump(results, f)
