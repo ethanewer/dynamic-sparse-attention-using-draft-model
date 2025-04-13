@@ -1,8 +1,7 @@
 import math
-from typing import Optional
+from typing import Literal
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from minference import vertical_slash_sparse_attention  # type: ignore
 from torch import Tensor
@@ -28,93 +27,108 @@ def vertical_slash_sparse_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    attn_output = vertical_slash_sparse_attention(
+    attention_output = vertical_slash_sparse_attention(
         query, key, value, v_idx.clone(), s_idx.clone()
     )
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attention_output = attention_output.transpose(1, 2).contiguous()
 
-    return attn_output, None
+    return attention_output, None
 
 
-def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
-    batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
+def reduce_attention_scores_for_gqa(
+    attention_scores: Tensor,
+    n_rep: int,
+    reduction: Literal["mean", "max"],
+) -> Tensor:
+    batch, num_attention_heads, seq_len, head_dim = attention_scores.shape
     if n_rep == 1:
-        return hidden_states
+        return attention_scores
 
     num_key_value_heads = num_attention_heads // n_rep
-    return hidden_states.view(
-        batch,
-        num_key_value_heads,
-        n_rep,
-        seq_len,
-        head_dim,
-    ).mean(dim=2)
+    if reduction == "mean":
+        return attention_scores.view(
+            batch,
+            num_key_value_heads,
+            n_rep,
+            seq_len,
+            head_dim,
+        ).mean(dim=2)
+    elif reduction == "max":
+        return attention_scores.view(
+            batch,
+            num_key_value_heads,
+            n_rep,
+            seq_len,
+            head_dim,
+        ).mean(dim=2)
+    else:
+        raise ValueError(f"{reduction=} not supported.")
 
 
 def compress_kv(
     key_states: Tensor,
     query_states: Tensor,
     value_states: Tensor,
-    attention_mask: Optional[Tensor],
     window_size: int,
     max_capacity_prompt: int,
     num_vertical: int,
-    pooling: str,
+    query_aggregation: Literal["mean", "max"],
+    pooling: Literal["mean", "max"],
     kernel_size: int,
 ) -> tuple[Tensor, Tensor, Tensor]:
     _, _, seq_len, head_dim = query_states.shape
     assert key_states.shape[-2] == seq_len
     assert seq_len > max_capacity_prompt
 
-    if query_states.shape[1] > key_states.shape[1]:
-        queries_per_key_value = query_states.shape[1] // key_states.shape[1]
-        query_states = pool_queries_for_gqa(
-            query_states,
-            queries_per_key_value,
-        )
-        assert query_states.shape[1] == key_states.shape[1]
+    num_key_value_groups = query_states.shape[1] // key_states.shape[1]
+    key_states = repeat_kv(key_states, num_key_value_groups)
 
-    attention_weights = torch.matmul(
+    attention_scores = torch.matmul(
         query_states[..., -window_size:, :],
         key_states.transpose(2, 3),
     ) / math.sqrt(head_dim)
-    mask = torch.full(
+
+    attention_mask = torch.full(
         (window_size, window_size),
-        torch.finfo(attention_weights.dtype).min,
-        device=attention_weights.device,
-    )
-    mask_cond = torch.arange(mask.size(-1), device=attention_weights.device)
-    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-    mask = mask.to(attention_weights.device)
+        torch.finfo(attention_scores.dtype).min,
+        device=attention_scores.device,
+    ).triu(1)
 
-    if attention_mask is not None:
-        attention_mask = mask[None, None, :, :]
-        attention_weights[:, :, -window_size:, -window_size:] += attention_mask
+    attention_scores[:, :, -window_size:, -window_size:] += attention_mask
+    attention_scores = attention_scores.softmax(dim=-1, dtype=torch.float32)
+    attention_scores = attention_scores[:, :, -window_size:, :-window_size]
 
-    attention_weights = nn.functional.softmax(
-        attention_weights, dim=-1, dtype=torch.float32
-    ).to(query_states.dtype)
-    attention_weights_sum = attention_weights[:, :, -window_size:, :-window_size].sum(
-        dim=-2
+    if query_aggregation == "mean":
+        attention_scores = attention_scores.mean(dim=-2)
+    elif query_aggregation == "max":
+        attention_scores = attention_scores.max(dim=-2).values
+    else:
+        raise ValueError(f"{query_aggregation=} not supported.")
+
+    attention_scores = reduce_attention_scores_for_gqa(
+        attention_scores,
+        num_key_value_groups,
+        query_aggregation,
     )
-    if pooling == "avgpool":
-        attention_cache = F.avg_pool1d(
-            attention_weights_sum,
+
+    if pooling == "mean":
+        attention_scores = F.avg_pool1d(
+            attention_scores,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
             stride=1,
         )
-    elif pooling == "maxpool":
-        attention_cache = F.max_pool1d(
-            attention_weights_sum,
+    elif pooling == "max":
+        attention_scores = F.max_pool1d(
+            attention_scores,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
             stride=1,
         )
     else:
-        raise ValueError("Pooling method not supported")
+        raise ValueError(f"{pooling=} not supported.")
 
-    indices = attention_cache.topk(
+    indices = attention_scores.topk(
         max(max_capacity_prompt - window_size, num_vertical),
         dim=-1,
     ).indices
