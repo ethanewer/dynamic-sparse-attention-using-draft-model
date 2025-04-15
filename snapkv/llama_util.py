@@ -47,6 +47,7 @@ class LlamaAttentionSnapKV(LlamaAttention):
                     query_states,
                     value_states,
                     attention_mask,
+                    self.config.num_attention_heads // self.config.num_key_value_heads,
                 )
 
                 past_key_value.update(

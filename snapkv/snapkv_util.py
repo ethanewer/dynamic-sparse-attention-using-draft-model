@@ -64,14 +64,17 @@ class SnapKVCluster:
         if q_len < self.max_capacity_prompt:
             return key_states, value_states
         else:
+            # attn_weights = torch.matmul(
+            #     query_states[..., -self.window_size :, :], key_states.transpose(2, 3)
+            # ) / math.sqrt(head_dim)
+
             # ----- new code -----
-            num_key_value_groups = query_states.shape[1] // key_states.shape[1]
-            key_states = repeat_kv(key_states, num_key_value_groups)
+            attn_weights = torch.matmul(
+                query_states[..., -self.window_size :, :],
+                repeat_kv(key_states, num_key_value_groups).transpose(2, 3),
+            ) / math.sqrt(head_dim)
             # --------------------
 
-            attn_weights = torch.matmul(
-                query_states[..., -self.window_size :, :], key_states.transpose(2, 3)
-            ) / math.sqrt(head_dim)
             mask = torch.full(
                 (self.window_size, self.window_size),
                 torch.finfo(attn_weights.dtype).min,
