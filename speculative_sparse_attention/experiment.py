@@ -49,7 +49,7 @@ def sparse_prefill_snapkv_experiment(
     return torch.cat(logits).float().cpu()
 
 
-def lookahead_sparse_prefill_snapkv_experiment(
+def speculative_sparse_attention_experiment(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     lookahead_ids: Tensor,

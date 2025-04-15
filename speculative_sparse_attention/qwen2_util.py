@@ -13,7 +13,7 @@ from transformers.models.qwen2.modeling_qwen2 import (
 from .util import compress_kv, vertical_slash_sparse_attention_forward
 
 
-class Qwen2AttentionSnapKV(Qwen2Attention):
+class Qwen2AttentionSSA(Qwen2Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -141,7 +141,7 @@ def update_qwen2_model_for_sparse_prefill_snapkv(model):
     model.config.kernel_size = 15
 
     for i in range(len(model.model.layers)):
-        model.model.layers[i].self_attn.forward = Qwen2AttentionSnapKV.forward.__get__(
+        model.model.layers[i].self_attn.forward = Qwen2AttentionSSA.forward.__get__(
             model.model.layers[i].self_attn,
             type(model.model.layers[i].self_attn),
         )

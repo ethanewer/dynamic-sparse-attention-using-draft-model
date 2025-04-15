@@ -35,21 +35,6 @@ def vertical_slash_sparse_attention_forward(
     return attention_output, None
 
 
-def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
-    batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-
-    num_key_value_heads = num_attention_heads // n_rep
-    return hidden_states.view(
-        batch,
-        num_key_value_heads,
-        n_rep,
-        seq_len,
-        head_dim,
-    ).mean(dim=2)
-
-
 def compress_kv(
     key_states: Tensor,
     query_states: Tensor,
@@ -65,12 +50,9 @@ def compress_kv(
     assert key_states.shape[-2] == seq_len
     assert seq_len > max_capacity_prompt
 
-    if query_states.shape[1] > key_states.shape[1]:
-        query_states = pool_queries_for_gqa(
-            query_states,
-            query_states.shape[1] // key_states.shape[1],
-        )
-        assert query_states.shape[1] == key_states.shape[1]
+    num_key_value_heads = key_states.shape[1]
+    num_key_value_groups = query_states.shape[1] // num_key_value_heads
+    key_states = repeat_kv(key_states, num_key_value_groups)
 
     attention_scores = torch.matmul(
         query_states[..., -window_size:, :],
@@ -86,13 +68,6 @@ def compress_kv(
     attention_scores[:, :, -window_size:, -window_size:] += attention_mask
     attention_scores = attention_scores.softmax(dim=-1, dtype=torch.float32)
     attention_scores = attention_scores[:, :, -window_size:, :-window_size]
-
-    if query_aggregation == "mean":
-        attention_scores = attention_scores.mean(dim=-2)
-    elif query_aggregation == "max":
-        attention_scores = attention_scores.max(dim=-2).values
-    else:
-        raise ValueError(f"{query_aggregation=} not supported.")
 
     if pooling == "mean":
         attention_scores = F.avg_pool1d(
@@ -110,6 +85,27 @@ def compress_kv(
         )
     else:
         raise ValueError(f"{pooling=} not supported.")
+
+    attention_scores = attention_scores.view(
+        attention_scores.shape[0],
+        num_key_value_heads,
+        num_key_value_groups * attention_scores.shape[2],
+        attention_scores.shape[3],
+    )
+    if query_aggregation == "mean":
+        attention_scores.mean(dim=2)
+    elif query_aggregation == "max":
+        attention_scores = attention_scores.max(dim=2).values
+    else:
+        raise ValueError(f"{query_aggregation=} not supported.")
+
+    attention_scores = attention_scores.view(
+        value_states.shape[0],
+        value_states.shape[1],
+        num_key_value_groups,
+        value_states.shape[2],
+        value_states.shape[3],
+    ).mean(dim=2)
 
     indices = attention_scores.topk(
         max(max_capacity_prompt - window_size, num_vertical),

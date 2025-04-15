@@ -51,7 +51,7 @@ def sparse_prefill_snapkv_generate(
     )
 
 
-def lookahead_sparse_prefill_snapkv_generate(
+def speculative_sparse_attention_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     attention_mask: Tensor,

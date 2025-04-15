@@ -3,97 +3,105 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
+
+# perform qk calculation and get indices
+# this version will not update in inference mode
+
+
+# Copied from transformers.models.llama.modeling_llama.repeat_kv
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
 class SnapKVCluster:
     def __init__(
         self,
-        window_size=32,
-        max_capacity_prompt=2048,
+        window_size=64,
+        max_capacity_prompt=256 + 64,
         kernel_size=5,
         pooling="avgpool",
-        log_indices=False,
-    ) -> None:
+    ):
         self.window_size = window_size
         self.max_capacity_prompt = max_capacity_prompt
-        assert self.max_capacity_prompt > self.window_size
+        assert self.max_capacity_prompt - self.window_size > 0
         self.kernel_size = kernel_size
         self.pooling = pooling
-        self.log_indices = log_indices
 
-    @staticmethod
-    def pool_queries_for_gqa(hidden_states: Tensor, n_rep: int) -> Tensor:
-        batch, num_attention_heads, seq_len, head_dim = hidden_states.shape
-        if n_rep == 1:
-            return hidden_states
-
-        num_key_value_heads = num_attention_heads // n_rep
-        return hidden_states.view(
-            batch,
-            num_key_value_heads,
-            n_rep,
-            seq_len,
-            head_dim,
-        ).mean(dim=2)
+    def reset(
+        self,
+        window_size=64,
+        max_capacity_prompt=256 + 64,
+        kernel_size=5,
+        pooling="avgpool",
+    ):
+        self.window_size = window_size
+        self.max_capacity_prompt = max_capacity_prompt
+        assert self.max_capacity_prompt - self.window_size > 0
+        self.kernel_size = kernel_size
+        self.pooling = pooling
 
     def update_kv(
         self,
-        key_states: Tensor,
-        query_states: Tensor,
-        value_states: Tensor,
-        attention_mask: Tensor,
-    ) -> tuple[Tensor, Tensor]:
+        key_states,
+        query_states,
+        value_states,
+        attention_mask,
+        num_key_value_groups,
+    ):
         # check if prefix phase
         assert key_states.shape[-2] == query_states.shape[-2]
-
-        # average queries for group query attention
-        if query_states.shape[1] > key_states.shape[1]:
-            queries_per_key_value = query_states.shape[1] // key_states.shape[1]
-            query_states = self.pool_queries_for_gqa(
-                query_states,
-                queries_per_key_value,
-            )
-            assert query_states.shape[1] == key_states.shape[1]
-
-        _, _, seq_len, head_dim = query_states.shape
-        if seq_len < self.max_capacity_prompt:
+        bsz, num_heads, q_len, head_dim = query_states.shape
+        if q_len < self.max_capacity_prompt:
             return key_states, value_states
         else:
-            attention_weights = torch.matmul(
-                query_states[..., -self.window_size :, :],
-                key_states.transpose(2, 3),
+            # ----- new code -----
+            num_key_value_groups = query_states.shape[1] // key_states.shape[1]
+            key_states = repeat_kv(key_states, num_key_value_groups)
+            # --------------------
+
+            attn_weights = torch.matmul(
+                query_states[..., -self.window_size :, :], key_states.transpose(2, 3)
             ) / math.sqrt(head_dim)
             mask = torch.full(
                 (self.window_size, self.window_size),
-                torch.finfo(attention_weights.dtype).min,
-                device=attention_weights.device,
+                torch.finfo(attn_weights.dtype).min,
+                device=attn_weights.device,
             )
-            mask_cond = torch.arange(mask.size(-1), device=attention_weights.device)
+            mask_cond = torch.arange(mask.size(-1), device=attn_weights.device)
             mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-            mask = mask.to(attention_weights.device)
+            mask = mask.to(attn_weights.device)
             attention_mask = mask[None, None, :, :]
 
-            attention_weights[:, :, -self.window_size :, -self.window_size :] += (
+            attn_weights[:, :, -self.window_size :, -self.window_size :] += (
                 attention_mask
             )
 
-            attention_weights = nn.functional.softmax(
-                attention_weights, dim=-1, dtype=torch.float32
+            attn_weights = nn.functional.softmax(
+                attn_weights, dim=-1, dtype=torch.float32
             ).to(query_states.dtype)
-            attention_weights_sum = attention_weights[
+            attn_weights_sum = attn_weights[
                 :, :, -self.window_size :, : -self.window_size
             ].sum(dim=-2)
             if self.pooling == "avgpool":
-                attention_cache = F.avg_pool1d(
-                    attention_weights_sum,
+                attn_cache = F.avg_pool1d(
+                    attn_weights_sum,
                     kernel_size=self.kernel_size,
                     padding=self.kernel_size // 2,
                     stride=1,
                 )
             elif self.pooling == "maxpool":
-                attention_cache = F.max_pool1d(
-                    attention_weights_sum,
+                attn_cache = F.max_pool1d(
+                    attn_weights_sum,
                     kernel_size=self.kernel_size,
                     padding=self.kernel_size // 2,
                     stride=1,
@@ -101,34 +109,29 @@ class SnapKVCluster:
             else:
                 raise ValueError("Pooling method not supported")
 
-            indices = attention_cache.topk(
-                self.max_capacity_prompt - self.window_size,
-                dim=-1,
+            # ----- new code -----
+            attn_cache = attn_cache.view(
+                bsz,
+                -1,
+                num_key_value_groups,
+                q_len - self.window_size,
+            ).mean(dim=2)
+            # --------------------
+
+            indices = attn_cache.topk(
+                self.max_capacity_prompt - self.window_size, dim=-1
             ).indices
-
-            if self.log_indices:
-                window_indices = torch.arange(seq_len - self.window_size, seq_len)[
-                    None, None
-                ].expand(indices.shape[0], indices.shape[1], -1)
-                self.most_recent_indices = torch.cat(
-                    (indices.cpu(), window_indices),
-                    dim=2,
-                )
-
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-            key_past_compress = key_states[:, :, : -self.window_size, :].gather(
-                dim=2,
-                index=indices,
+            k_past_compress = key_states[:, :, : -self.window_size, :].gather(
+                dim=2, index=indices
             )
-            value_past_compress = value_states[:, :, : -self.window_size, :].gather(
-                dim=2,
-                index=indices,
+            v_past_compress = value_states[:, :, : -self.window_size, :].gather(
+                dim=2, index=indices
             )
-            key_window = key_states[:, :, -self.window_size :, :]
-            value_window = value_states[:, :, -self.window_size :, :]
-            key_states = torch.cat([key_past_compress, key_window], dim=2)
-            value_states = torch.cat([value_past_compress, value_window], dim=2)
-
+            k_cur = key_states[:, :, -self.window_size :, :]
+            v_cur = value_states[:, :, -self.window_size :, :]
+            key_states = torch.cat([k_past_compress, k_cur], dim=2)
+            value_states = torch.cat([v_past_compress, v_cur], dim=2)
             return key_states, value_states
 
 
@@ -142,13 +145,9 @@ def init_snapkv(self):
             self.config.kernel_size = 5
         if not hasattr(self.config, "pooling"):
             self.config.pooling = "avgpool"
-        if not hasattr(self.config, "log_indices"):
-            self.config.log_indices = False
-
     self.kv_cluster = SnapKVCluster(
         window_size=self.config.window_size,
         max_capacity_prompt=self.config.max_capacity_prompt,
         kernel_size=self.config.kernel_size,
         pooling=self.config.pooling,
-        log_indices=self.config.log_indices,
     )

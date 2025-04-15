@@ -13,7 +13,7 @@ from transformers.models.llama.modeling_llama import (
 from .util import compress_kv, vertical_slash_sparse_attention_forward
 
 
-class LlamaAttentionSnapKV(LlamaAttention):
+class LlamaAttentionSSA(LlamaAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -129,7 +129,7 @@ def update_llama_model_for_sparse_prefill_snapkv(model):
     model.config.kernel_size = 15
 
     for i in range(len(model.model.layers)):
-        model.model.layers[i].self_attn.forward = LlamaAttentionSnapKV.forward.__get__(
+        model.model.layers[i].self_attn.forward = LlamaAttentionSSA.forward.__get__(
             model.model.layers[i].self_attn,
             type(model.model.layers[i].self_attn),
         )
