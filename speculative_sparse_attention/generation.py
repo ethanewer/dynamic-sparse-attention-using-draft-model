@@ -24,7 +24,7 @@ def sparse_prefill_snapkv_generate(
     prefill_window_size: int = 1024,
     num_vertical: int = 1024,
     query_aggregation: Literal["mean", "max"] = "mean",
-    pooling: Literal["mean", "max"] = "mean",
+    pooling: Literal["mean", "max"] = "max",
     kernel_size: int = 15,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
@@ -61,7 +61,7 @@ def speculative_sparse_attention_generate(
     prefill_window_size: int = 1024,
     num_vertical: int = 1024,
     query_aggregation: Literal["mean", "max"] = "mean",
-    pooling: Literal["mean", "max"] = "mean",
+    pooling: Literal["mean", "max"] = "max",
     kernel_size: int = 15,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
