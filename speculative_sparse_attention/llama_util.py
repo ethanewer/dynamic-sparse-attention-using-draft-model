@@ -119,7 +119,7 @@ class LlamaAttentionSSA(LlamaAttention):
         return attn_output, attn_weights  # type: ignore
 
 
-def update_llama_model_for_sparse_prefill_snapkv(model):
+def update_llama_model_for_ssa(model):
     model.config.window_size = 64
     model.config.max_capacity_prompt = 1024
     model.config.prefill_window_size = 1024

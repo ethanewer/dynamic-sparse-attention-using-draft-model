@@ -7,15 +7,11 @@ from transformers.cache_utils import DynamicCache
 from transformers.models.llama import LlamaForCausalLM
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
-from .llama_util import update_llama_model_for_sparse_prefill_snapkv
-from .qwen2_util import update_qwen2_model_for_sparse_prefill_snapkv
+from .llama_util import update_llama_model_for_ssa
+from .qwen2_util import update_qwen2_model_for_ssa
 
 
-def ceil64(x: int) -> int:
-    return max(((x + 63) // 64) * 64, 64)
-
-
-def sparse_prefill_snapkv_generate(
+def speculative_sparse_attention_without_lookahead_generate(
     model: LlamaForCausalLM | Qwen2ForCausalLM,
     input_ids: Tensor,
     attention_mask: Tensor,
@@ -29,9 +25,9 @@ def sparse_prefill_snapkv_generate(
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
-        update_llama_model_for_sparse_prefill_snapkv(model)
+        update_llama_model_for_ssa(model)
     elif isinstance(model, Qwen2ForCausalLM):
-        update_qwen2_model_for_sparse_prefill_snapkv(model)
+        update_qwen2_model_for_ssa(model)
     else:
         raise NotImplementedError()
 
@@ -66,9 +62,9 @@ def speculative_sparse_attention_generate(
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
-        update_llama_model_for_sparse_prefill_snapkv(model)
+        update_llama_model_for_ssa(model)
     elif isinstance(model, Qwen2ForCausalLM):
-        update_qwen2_model_for_sparse_prefill_snapkv(model)
+        update_qwen2_model_for_ssa(model)
     else:
         raise NotImplementedError()
 
