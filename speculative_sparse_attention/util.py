@@ -99,7 +99,10 @@ def compress_kv(
         raise ValueError(f"{pooling=} not supported.")
 
     indices = attention_scores.topk(
-        max(max_capacity_prompt - window_size, num_vertical),
+        min(
+            max(max_capacity_prompt - window_size, num_vertical),
+            attention_scores.shape[-1],
+        ),
         dim=-1,
     ).indices
     topk_indices = indices[..., : max_capacity_prompt - window_size]

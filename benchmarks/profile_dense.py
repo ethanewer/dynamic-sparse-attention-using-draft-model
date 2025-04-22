@@ -10,8 +10,22 @@ from transformers import AutoModelForCausalLM, BitsAndBytesConfig  # type: ignor
 assert torch.cuda.is_available()
 device = "cuda"
 
+MODEL = "llama"
+NUM_FULL_TOKENS = 64
+
+full_model_name = (
+    "meta-llama/Llama-3.1-8B-Instruct"
+    if MODEL == "llama"
+    else "Qwen/Qwen2.5-14B-Instruct"
+)
+draft_model_name = (
+    "meta-llama/Llama-3.2-1B-Instruct"
+    if MODEL == "llama"
+    else "Qwen/Qwen2.5-0.5B-Instruct"
+)
+
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-7B-Instruct",
+    full_model_name,
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -31,8 +45,8 @@ def clear_cache():
 
 generation_kwargs = dict(
     max_length=None,
-    max_new_tokens=32,
-    min_new_tokens=32,
+    max_new_tokens=NUM_FULL_TOKENS,
+    min_new_tokens=NUM_FULL_TOKENS,
     do_sample=False,
     temperature=None,
     top_p=None,
@@ -54,7 +68,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(8192, 82000, 8192):
+for input_size in range(8192, 100000 if MODEL == "llama" else 82000, 8192):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     attention_mask = torch.ones_like(input_ids)
 
@@ -92,5 +106,5 @@ for input_size in range(8192, 82000, 8192):
     results["input_size"].append(input_size)
 
 
-with open("quantized-7b-dense-benchmark.json", "w") as f:
+with open(f"quantized-{MODEL}-dense-benchmark({NUM_FULL_TOKENS}).json", "w") as f:
     json.dump(results, f)

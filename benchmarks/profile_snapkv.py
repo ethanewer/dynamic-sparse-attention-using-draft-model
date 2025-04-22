@@ -12,9 +12,23 @@ from snapkv import snapkv_generate
 assert torch.cuda.is_available()
 device = "cuda"
 
+MAX_CAPACITY_PROMPT = 1024
+MODEL = "llama"
+NUM_FULL_TOKENS = 64
+
+full_model_name = (
+    "meta-llama/Llama-3.1-8B-Instruct"
+    if MODEL == "llama"
+    else "Qwen/Qwen2.5-14B-Instruct"
+)
+draft_model_name = (
+    "meta-llama/Llama-3.2-1B-Instruct"
+    if MODEL == "llama"
+    else "Qwen/Qwen2.5-0.5B-Instruct"
+)
 
 model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Llama-3.1-8B-Instruct",
+    full_model_name,
     attn_implementation="flash_attention_2",
     quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
@@ -35,8 +49,8 @@ def clear_cache():
 
 generation_kwargs = dict(
     max_length=None,
-    max_new_tokens=32,
-    min_new_tokens=32,
+    max_new_tokens=NUM_FULL_TOKENS,
+    min_new_tokens=NUM_FULL_TOKENS,
     do_sample=False,
     temperature=None,
     top_p=None,
@@ -61,7 +75,7 @@ max_memory_reserved_before = torch.cuda.max_memory_reserved() / 1024**2
 
 results = defaultdict(list)
 
-for input_size in range(2048, 100000, 2048):
+for input_size in range(8192, 100000 if MODEL == "llama" else 82000, 8192):
     input_ids: Tensor = torch.randint(8192, (1, input_size), device=device)
     attention_mask = torch.ones_like(input_ids)
 
@@ -76,8 +90,7 @@ for input_size in range(2048, 100000, 2048):
         model=model,
         input_ids=input_ids,
         attention_mask=attention_mask,
-        window_size=64,
-        max_capacity_prompt=1024,
+        max_capacity_prompt=MAX_CAPACITY_PROMPT,
         generation_kwargs=generation_kwargs,
     )
 
@@ -101,5 +114,8 @@ for input_size in range(2048, 100000, 2048):
     results["max_memory_reserved_dif"].append(max_memory_reserved_dif)
     results["input_size"].append(input_size)
 
-with open("quantized-llama-snapkv-benchmark.json", "w") as f:
+with open(
+    f"quantized-{MODEL}-snapkv[{MAX_CAPACITY_PROMPT}]-benchmark({NUM_FULL_TOKENS}).json",
+    "w",
+) as f:
     json.dump(results, f)
