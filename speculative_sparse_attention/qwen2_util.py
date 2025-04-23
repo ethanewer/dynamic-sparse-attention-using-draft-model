@@ -69,10 +69,12 @@ class Qwen2AttentionSSA(Qwen2Attention):
                     cache_kwargs,
                 )
 
-        if indices is not None:
-            v_idx = indices[..., : self.config.num_vertical].int()
+        num_vertical = self.config.num_vertical
+        prefill_window_size = self.config.prefill_window_size
+        if indices is not None and input_shape[-1] > num_vertical + prefill_window_size:
+            v_idx = indices[..., :num_vertical].int()
             s_idx = torch.arange(
-                self.config.prefill_window_size,
+                prefill_window_size,
                 -1,
                 -64,
                 dtype=v_idx.dtype,
