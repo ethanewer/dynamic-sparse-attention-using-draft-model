@@ -61,12 +61,23 @@ def speculative_sparse_attention_generate(
     kernel_size: int = 5,
     generation_kwargs: dict[str, Any] = {},
 ) -> Tensor:
+    assert max_capacity_prompt <= prefill_window_size + num_vertical
+    assert prefill_window_size % 64 == 0 and kernel_size % 2 == 1
+
     if isinstance(model, LlamaForCausalLM):
         update_llama_model_for_ssa(model)
     elif isinstance(model, Qwen2ForCausalLM):
         update_qwen2_model_for_ssa(model)
     else:
         raise NotImplementedError()
+
+    if input_ids.shape[1] <= max_capacity_prompt:
+        return model.generate(  # type: ignore
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            **generation_kwargs,
+        )
 
     lookahead_size = lookahead_ids.shape[1] - input_ids.shape[1]
 
