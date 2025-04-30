@@ -1,5 +1,5 @@
 import math
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -10,14 +10,14 @@ from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
 
 
 def vertical_slash_sparse_attention_forward(
-    module: LlamaAttention | Qwen2Attention,
+    module: Optional[LlamaAttention | Qwen2Attention],
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
     v_idx: Tensor,
     s_idx: Tensor,
 ) -> tuple[torch.Tensor, None]:
-    if hasattr(module, "num_key_value_groups"):
+    if module is not None and hasattr(module, "num_key_value_groups"):
         key = repeat_kv(key, module.num_key_value_groups)
         value = repeat_kv(value, module.num_key_value_groups)
         v_idx = repeat_kv(v_idx[..., None], module.num_key_value_groups)[..., 0]

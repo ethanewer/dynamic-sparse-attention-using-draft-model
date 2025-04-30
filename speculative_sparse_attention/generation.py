@@ -6,9 +6,13 @@ from torch import Tensor
 from transformers.cache_utils import DynamicCache
 from transformers.models.llama import LlamaForCausalLM
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+    Qwen2_5_VLForConditionalGeneration,
+)
 
 from .llama_util import update_llama_model_for_ssa
 from .qwen2_util import update_qwen2_model_for_ssa
+from .qwen2_vl_util import update_qwen2_vl_model_for_ssa
 
 
 def speculative_sparse_attention_without_lookahead_generate(
@@ -23,11 +27,14 @@ def speculative_sparse_attention_without_lookahead_generate(
     pooling: Literal["mean", "max"] = "max",
     kernel_size: int = 5,
     generation_kwargs: dict[str, Any] = {},
+    multimodal_inputs: dict[str, Any] = {},
 ) -> Tensor:
     if isinstance(model, LlamaForCausalLM):
         update_llama_model_for_ssa(model)
     elif isinstance(model, Qwen2ForCausalLM):
         update_qwen2_model_for_ssa(model)
+    elif isinstance(model, Qwen2_5_VLForConditionalGeneration):
+        update_qwen2_vl_model_for_ssa(model)
     else:
         raise NotImplementedError()
 
@@ -44,6 +51,7 @@ def speculative_sparse_attention_without_lookahead_generate(
         attention_mask=attention_mask,
         use_cache=True,
         **generation_kwargs,
+        **multimodal_inputs,
     )
 
 
@@ -60,6 +68,7 @@ def speculative_sparse_attention_generate(
     pooling: Literal["mean", "max"] = "max",
     kernel_size: int = 5,
     generation_kwargs: dict[str, Any] = {},
+    multimodal_inputs: dict[str, Any] = {},
 ) -> Tensor:
     assert max_capacity_prompt <= prefill_window_size + num_vertical
     assert prefill_window_size % 64 == 0 and kernel_size % 2 == 1
@@ -68,6 +77,8 @@ def speculative_sparse_attention_generate(
         update_llama_model_for_ssa(model)
     elif isinstance(model, Qwen2ForCausalLM):
         update_qwen2_model_for_ssa(model)
+    elif isinstance(model, Qwen2_5_VLForConditionalGeneration):
+        update_qwen2_vl_model_for_ssa(model)
     else:
         raise NotImplementedError()
 
@@ -77,6 +88,7 @@ def speculative_sparse_attention_generate(
             attention_mask=attention_mask,
             use_cache=True,
             **generation_kwargs,
+            **multimodal_inputs,
         )
 
     lookahead_size = lookahead_ids.shape[1] - input_ids.shape[1]
@@ -93,13 +105,24 @@ def speculative_sparse_attention_generate(
 
     past_key_values = DynamicCache()
 
-    with torch.no_grad():
-        model.model(
-            input_ids=lookahead_ids,
-            attention_mask=extended_attention_mask,
-            past_key_values=past_key_values,
-            use_cache=True,
-        )
+    if isinstance(model, Qwen2_5_VLForConditionalGeneration):
+        assert multimodal_inputs
+        with torch.no_grad():
+            model(
+                input_ids=lookahead_ids,
+                attention_mask=extended_attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+                **multimodal_inputs,
+            )
+    else:
+        with torch.no_grad():
+            model.model(
+                input_ids=lookahead_ids,
+                attention_mask=extended_attention_mask,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
 
     past_key_values.crop(max_capacity_prompt)
     del extended_attention_mask
@@ -109,6 +132,7 @@ def speculative_sparse_attention_generate(
         attention_mask=attention_mask,
         use_cache=True,
         past_key_values=past_key_values,
+        **multimodal_inputs,
         **generation_kwargs,
     )
 
