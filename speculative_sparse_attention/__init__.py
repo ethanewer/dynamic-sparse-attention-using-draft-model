@@ -3,6 +3,7 @@ from .experiment import (
     speculative_sparse_attention_without_lookahead_experiment,
 )
 from .generation import (
+    greedy_vl_ssa_generate,
     speculative_sparse_attention_generate,
     speculative_sparse_attention_without_lookahead_generate,
 )
@@ -21,4 +22,5 @@ __all__ = [
     "speculative_sparse_attention_without_lookahead_generate",
     "speculative_sparse_attention_experiment",
     "speculative_sparse_attention_without_lookahead_experiment",
+    "greedy_vl_ssa_generate",
 ]
